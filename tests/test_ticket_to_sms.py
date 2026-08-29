@@ -463,7 +463,12 @@ def test_budget_exceeded_leaves_tag_for_retry_and_adds_note_once():
     assert budget.notified is True
     assert len(zammad.internal_notes) == 1
     note_body = zammad.internal_notes[0][1]
-    assert "01.01.2026 01:00:00" in note_body
+    # Zeitzonen-unabhaengig erwarten: die Produktionslogik wandelt den (UTC-)
+    # ETA-Zeitpunkt per astimezone() in die lokale Zeitzone der Maschine um
+    # -- ein hartkodierter String waere nur in EINER Zeitzone korrekt
+    # (frueher: CET/CEST-hartkodiert, brach auf dem UTC-CI-Runner).
+    expected_eta = datetime(2026, 1, 1, tzinfo=timezone.utc).astimezone().strftime("%d.%m.%Y %H:%M:%S")
+    assert expected_eta in note_body
 
 
 def test_budget_exceeded_mail_includes_group_agent_breakdown():
