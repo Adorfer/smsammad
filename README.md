@@ -428,6 +428,56 @@ darauf den Tag `sms-out` setzen:
   System-Vermerke fälschlich).
 - Aktion: Tag `sms-out` hinzufügen.
 
+## Für Zammad-Agenten: SMS manuell verschicken
+
+Eigenständige Kurzanleitung für den praktischen Alltag am Ticket -- bewusst
+mit gewissen Redundanzen zu den technischen Abschnitten oben, damit sie
+für sich allein funktioniert. Willst du "zu Fuß" eine SMS an einen Kunden
+schicken, gehe so vor:
+
+1. **Kunde anlegen** (falls noch nicht vorhanden) -- wichtig: die
+   **Mobiltelefonnummer** muss im entsprechenden Feld eingetragen sein,
+   sonst kann keine SMS zugestellt werden.
+2. **Neues Ticket** in der Hotline-Queue anlegen, als Artikeltyp
+   **"Anruf"** -- wirklich **nicht** "E-Mail"! Nur Anruf-Artikel werden
+   überhaupt als SMS erkannt und verschickt.
+3. **Betreff ist egal** -- der wird NICHT als SMS verschickt, nur der
+   eigentliche Artikeltext.
+4. **Bitte kurz fassen**: jede angefangene SMS von 160 Zeichen kostet
+   Geld, und mehrteilige SMS kommen beim Empfänger als mehrere einzelne
+   Nachrichten hintereinander und unübersichtlich an.
+5. Nach Klick auf "Aktualisieren" sollte binnen weniger Sekunden
+   automatisch (per Zammad-Trigger) der Tag `sms-out` erscheinen. Falls
+   das ausnahmsweise mal nicht klappt: den Tag `sms-out` einfach selbst
+   über das "+"-Feld bei den Tags ergänzen.
+6. Nach dem nächsten SMSammad-Durchlauf (alle paar Minuten, üblicherweise
+   nach rund 3-10 Minuten) erscheint unter der SMS eine **interne Notiz**
+   mit Versandstatus und dem **exakt gesendeten Wortlaut** -- bitte kurz
+   gegenprüfen, ob z.B. Umlaute/Sonderzeichen korrekt angekommen sind oder
+   der Text (je nach Konfiguration) gekürzt wurde, weil er zu lang war.
+
+## Für Zammad-Admins: SMSammad-User einrichten
+
+SMSammad braucht einen eigenen Zammad-Benutzer mit API-Token-Zugriff
+(`[zammad] token` in `config.ini`):
+
+1. Neuen Benutzer anlegen (z.B. "SMSammad" o.ä.), Rolle **Agent**.
+2. Über sein Profil einen **API-Token** generieren (Token Access) mit
+   Zugriff auf Ticket-/Artikel-/Tag-/Benutzer-Objekte.
+3. Dem Benutzer **vollen Zugriff auf mindestens die Queues** geben, in
+   denen er arbeiten soll (die unter `[zammad] group`/`new_customer_group`
+   konfigurierten Gruppen) -- ohne diese Berechtigung schlagen
+   Ticket-/Artikel-Aktionen trotz gültigem Token mit Rechtefehlern fehl
+   (Zammads Gruppen-Berechtigungen sind unabhängig von der Rolle).
+
+**Fallstrick im Zammad-Admin-UI**: Beim Ergänzen einer weiteren
+Queue-Berechtigung reicht es **nicht**, die Gruppe im Dropdown
+auszuwählen und rechts auf **"Hinzufügen"** zu klicken -- das trägt die
+Auswahl erstmal nur lokal ins Formular ein. Erst ein Klick auf
+**"Übermitteln"** unten rechts speichert die Änderung tatsächlich. Wird
+das vergessen, wirkt die Berechtigung im UI gesetzt, ist aber nie
+gespeichert worden.
+
 ## SMS-Versand-Verhalten
 
 - **Aufteilung** (`sms_split.split_for_sms`): lange Texte werden an
@@ -600,6 +650,39 @@ ist — einem Guthaben-Abschnitt: aktueller Stand, durchschnittlicher
 Verbrauch/Tag je Zeitraum, geschätzte Rest-Reichweite in Tagen (basierend
 auf der 7-Tage-Verbrauchsrate; "unbestimmbar", falls in den letzten 7
 Tagen kein positiver Verbrauch messbar war, z.B. nach einer Aufladung).
+
+**Beispiel** (erfundene Werte, Text-Variante -- real zusätzlich als
+HTML-Tabelle mit Farbcodierung Ein/Aus, s.
+[SMS-Versand-Verhalten](#sms-versand-verhalten)):
+
+```
+SMS-Statistik nach Gruppe:
+
+Gruppe                 24 Stunden     7 Tage       30 Tage
+                         Ein   Aus    Ein   Aus    Ein   Aus
+------------------------------------------------------------
+Hotline                    4     6     21    28     88   101
+SMS-Eingang-Unbekannt      1     0      5     0     17     0
+
+Guthaben:
+
+Aktuelles Guthaben: 25.77 Euro (Stand: 30.08.2026 10:00)
+
+Ø Verbrauch/Tag:
+  24 Stunden: 0.15 Euro/Tag
+  7 Tage: 0.18 Euro/Tag
+  30 Tage: 0.21 Euro/Tag
+
+Geschaetzte Reichweite: 143 Tage (Basis: letzte 7 Tage)
+```
+
+Lesehilfe: "Hotline" zeigt z.B. für die letzten 7 Tage 21 eingehende und
+28 ausgehende SMS: 88/101 in den letzten 30 Tagen deuten auf ein aktives
+Ticketaufkommen hin, während "SMS-Eingang-Unbekannt" (Absender ohne
+bestehenden Zammad-Kunden) nur eingehend und ohne Ausgang auftaucht --
+dort landen typischerweise SMS, die noch manuell einem Kunden zugeordnet
+werden müssen. Das Guthaben von 25,77 Euro reicht laut aktueller
+7-Tage-Verbrauchsrate (0,18 Euro/Tag) noch für rund 143 Tage.
 
 ## Cron-Betrieb
 
