@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zammad2teltonikasms"
+version = "0.1.0"
+description = "Bidirektionale Kopplung von Zammad und einem Teltonika-SMS-Gateway"
+requires-python = ">=3.10"
+dependencies = [
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+zammad2teltonikasms = "zammad2teltonikasms.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
