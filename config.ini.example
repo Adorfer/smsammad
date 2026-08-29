@@ -1,0 +1,155 @@
+; Vorlage fuer config.ini. Kopieren nach config.ini, echte Werte eintragen,
+; danach: chmod 600 config.ini (config.ini enthaelt Zugangsdaten und ist in
+; .gitignore).
+;
+; Alle Text-Werte hier stehen bewusst in Anfuehrungszeichen ("..." oder
+; '...', beides geht) -- damit Werte mit Leerzeichen (Gruppennamen,
+; Passwoerter, Pfade, ...) einfach so uebernommen werden koennen, ohne dass
+; man sich Gedanken um Escaping machen muss. Zahlen (z.B. max_sms_parts)
+; und true/false (z.B. verify_tls) bleiben OHNE Anfuehrungszeichen.
+
+[teltonika]
+; IP oder Hostname des Routers, ohne Schema
+host = "192.168.1.1"
+username = "user1"
+password = "user_pass"
+; ISO-Regioncode fuer die Rufnummer-Normalisierung (phonenumbers), z.B. DE
+default_country_code = "DE"
+; RUT-Router laufen ueblicherweise nur per HTTPS mit selbstsigniertem
+; Zertifikat (Port 80 meist zu). scheme = http nur falls das Geraet
+; tatsaechlich Klartext-HTTP spricht.
+scheme = "https"
+; Zertifikatspruefung: bei selbstsigniertem Zertifikat auf false lassen,
+; sonst schlaegt jede Anfrage mit einem TLS-Fehler fehl.
+verify_tls = false
+; Praefix fuer einen zweiten Parse-Versuch, wenn eine Absendernummer nicht
+; als gueltige Rufnummer erkannt wird (z.B. Kurzrufnummern ohne Vorwahl).
+; Leer lassen, um diesen Rekonstruktionsversuch zu deaktivieren -- dann wird
+; direkt der rohe Absender-String als Kunden-Identifikator verwendet.
+short_number_prefix = "0172"
+; Praefix fuer Absender, die auch mit obigem Praefix nicht als gueltige
+; Rufnummer erkannt werden -- Kurzwahlen wie "22543" (Netzbetreiber-
+; Systemnachrichten) oder alphanumerische Absender-IDs wie "CALLYA". Wird
+; beim Empfang vor den rohen Absender-String gesetzt (z.B. "Kurzwahl-22543"
+; bzw. "Kurzwahl-CALLYA") und landet so lesbar in Zammads Telefonfeld
+; (Buchstaben sind dort kein Problem); beim Versand wird der Praefix wieder
+; entfernt und roh an den Absender gesendet -- ermoeglicht auch Antworten an
+; Kurzwahlen/alphanumerische Absender. Leer lassen, um stattdessen den rohen
+; Absender-String ohne Praefix zu speichern.
+unresolved_sender_prefix = "Kurzwahl-"
+
+[zammad]
+; Basis-URL der Zammad-Instanz, ohne /api/v1
+url = "https://zammad.example.local"
+; Access Token eines API-Users mit Rechten fuer Ticket/Artikel/Tag/User-Objekte
+token = "CHANGEME"
+; Gruppe fuer neue Tickets von bereits bekannten Kunden
+group = "Users"
+; Gruppe fuer neue Tickets von SMS-Absendern ohne bestehenden Zammad-Kunden
+; (eigene Triage-Queue zur manuellen Sichtung)
+new_customer_group = "SMS-Eingang-Unbekannt"
+; Zammad-Nutzerfeld, das die Mobilnummer enthaelt
+phone_field = "mobile"
+; Prioritaets-ID, die bei SMS-Ueberlauf (zu viele Teile) gesetzt wird
+overflow_priority = 3
+
+[ticket_to_sms]
+; maximale Anzahl SMS-Teile
+max_sms_parts = 3
+; Verhalten bei Ueberlauf (> max_sms_parts):
+; "reject"   -- gar nicht senden, Fehler-Notiz, Tag sms-overflow, Prioritaet
+;               hoch (overflow_priority) -- Agent muss den Text kuerzen.
+; "truncate" -- die ersten max_sms_parts Teile trotzdem senden, Notiz weist
+;               auf die Kuerzung hin und zeigt den tatsaechlich gesendeten
+;               (gekuerzten) Text.
+on_overflow = "reject"
+; SMS-Sende-Budget (rollierende Fenster), gilt pro tatsaechlich versendeter
+; SMS (Mehrteiler zaehlen mehrfach). Bei Ueberschreitung wird das jeweilige
+; Ticket zurueckgestellt (Tag sms-out bleibt stehen) und im naechsten Lauf
+; erneut versucht.
+max_sms_per_hour = 20
+max_sms_per_24h = 100
+; SQLite-Datenbank fuer Budget-Zaehler UND Statistik (Zeitpunkt/Richtung/
+; Gruppe/Agent je SMS) -- muss fuer den Cron-User beschreibbar sein. Wird
+; sowohl fuer die Rate-Limit-Pruefung als auch fuer den 'stats'-Subcommand
+; und die Gruppe/Agent-Aufschluesselung in der Budget-Warn-Mail benutzt.
+stats_db_file = "~/.local/state/smsammad/stats.db"
+; Mindestabstand zwischen zwei Budget-Ueberschreitungs-Mails, um bei mehreren
+; Cronlaeufen in Folge nicht jedes Mal erneut zu mailen
+budget_notify_cooldown_minutes = 60
+
+[balance]
+; Prepaid-Guthaben-Ueberwachung der SIM-Karte im Router (optional -- Sektion
+; komplett weglassen, um dieses Feature zu deaktivieren). Der
+; 'balance-check'-Subcommand fragt taeglich das Guthaben ab.
+;
+; method = "ussd" (Default): synchron per RutOS-REST-API (/api/...),
+;   Ergebnis liegt sofort vor, i.d.R. kostenlos. Braucht einen EIGENEN
+;   Router-Account mit Zugriff auf die Mobile/USSD-API -- der cgi-bin-
+;   SMS-Account (s. [teltonika]) hat dort KEINE Berechtigung (live
+;   verifiziert: 401/403). Account im Router-WebUI anlegen (System ->
+;   Administration -> Users) und dort explizit Zugriff auf Network ->
+;   Mobile geben.
+; method = "sms": Abfrage-SMS an eine Kurzwahl, Antwort trifft asynchron
+;   ein und wird vom naechsten sms-to-ticket-Lauf ausgewertet (erkannt am
+;   Absender reply_sender).
+;
+; Ist die jeweils andere Methode ZUSAETZLICH vollstaendig konfiguriert,
+; schaltet balance-check bei einem Fehler der Default-Methode (Zugriff
+; verweigert oder Antwort nicht parsebar) fuer diesen Lauf automatisch auf
+; die andere um. Ohne konfigurierte Fallback-Methode wird der Fehler ganz
+; normal per Fehlermail gemeldet.
+method = "ussd"
+
+; -- method = "ussd" --
+; USSD-Code fuer die Guthaben-Abfrage
+ussd_code = "*100#"
+; Zugangsdaten des dedizierten Mobile-API-Accounts (siehe oben)
+api_username = "smsammad"
+api_password = "CHANGEME"
+; Modem-ID wie in der Router-WebUI-URL/API sichtbar (i.d.R. "1-1")
+modem_id = "1-1"
+
+; -- method = "sms" --
+; Kurzwahl, an die die Abfrage-SMS geschickt wird
+query_number = "111"
+; Text der Abfrage-SMS
+query_text = "Guthaben"
+; Erwarteter Absender der Antwort-SMS (Anbieter-spezifisch, hier Vodafone)
+reply_sender = "80808"
+
+; -- gemeinsam --
+; Schwellenwerte in Euro: >= warn_threshold_eur = ok (Ticket wird
+; geschlossen), zwischen alarm_threshold_eur und warn_threshold_eur = Ticket
+; bleibt offen mit erhoehter Prioritaet, < alarm_threshold_eur = Ticket
+; bleibt offen mit hoechster Prioritaet UND jede SMS-Versand-Notiz bekommt
+; zusaetzlich einen Warnhinweis
+warn_threshold_eur = 5.00
+alarm_threshold_eur = 1.00
+; Mindestabstand zwischen zwei Abfragen in Stunden
+query_interval_hours = 24
+; Zammad state_id fuer "closed" -- Standard-Zammad-Installationen nutzen 4,
+; bei Abweichungen ueber 'GET /api/v1/ticket_states' pruefen
+closed_state_id = 4
+; Regex zum Erkennen des Guthaben-Betrags in der USSD- bzw. SMS-Antwort,
+; GENAU EINE Erfassungsgruppe '(...)' fuer den Betrag (deutsches Komma als
+; Dezimaltrenner, z.B. "25,77"). Gross-/Kleinschreibung wird ignoriert.
+; Aendert der Provider den Antworttext (z.B. neue Werbeformulierung), reicht
+; es, hier den Regex anzupassen -- kein Code-Deploy noetig. Defaults passen
+; zum aktuellen Vodafone-Callya-Wortlaut ("Aktuelles Guthaben: 25,77 EUR"
+; bzw. "Guthaben betraegt 0,98 Euro").
+ussd_balance_regex = "Aktuelles Guthaben:\s*(\d+(?:,\d+)?)\s*EUR"
+sms_balance_regex = "Guthaben\s+betr[äa]gt\s+(\d+(?:,\d+)?)\s*Euro"
+
+[notification]
+; Fehlerbenachrichtigung per Mail bei unbehandelten Exceptions.
+; Abschnitt komplett weglassen, um Fehlermails dauerhaft zu deaktivieren.
+smtp_host = "mail.example.local"
+smtp_port = 587
+smtp_user = "smsammad@example.local"
+smtp_password = "CHANGEME"
+recipient = "ops@example.local"
+; Schalter zum temporaeren Deaktivieren, ohne obige Werte zu loeschen/
+; auskommentieren zu muessen. Bei --dry-run wird ohnehin unabhaengig
+; von diesem Wert nie eine Mail verschickt.
+enabled = true

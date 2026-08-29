@@ -1,0 +1,19 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Abhaengigkeiten installieren (Ubuntu-Pakete, kein pip/venv)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-requests python3-phonenumbers python3-pytest python3-responses
+
+      - name: pytest
+        run: pytest

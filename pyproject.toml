@@ -1,23 +1,14 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "zammad2teltonikasms"
+name = "smsammad"
 version = "0.1.0"
 description = "Bidirektionale Kopplung von Zammad und einem Teltonika-SMS-Gateway"
 requires-python = ">=3.10"
-dependencies = [
-    "requests",
-]
 
-[project.optional-dependencies]
-dev = [
-    "pytest",
-]
+# Kein pip install: Abhaengigkeiten kommen aus den Ubuntu-Paketen
+# python3-requests, python3-phonenumbers (Laufzeit) sowie
+# python3-pytest, python3-responses (Tests). Aufruf per
+# `python3 run.py ...` bzw. `pytest`, beides ohne
+# vorherige Installation des Pakets selbst (pythonpath s.u.).
 
-[project.scripts]
-zammad2teltonikasms = "zammad2teltonikasms.main:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.pytest.ini_options]
+pythonpath = ["src"]
