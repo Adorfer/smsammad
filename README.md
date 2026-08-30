@@ -494,8 +494,9 @@ gespeichert worden.
 - **Versand-Quittung**: jede erfolgreich gesendete SMS bekommt eine
   interne Notiz mit Zeichenzahl, Teilanzahl, Zeitstempel und dem exakt
   gesendeten Text (jeder Teil einzeln in `"..."`, damit Anfang/Ende klar
-  erkennbar sind) — es gibt **keine Zustellbestätigung** durch die
-  Teltonika-API, die Notiz bestätigt nur die Übergabe an den Router.
+  erkennbar sind) — die Notiz bestätigt nur die Übergabe an den Router,
+  eine **SMS-Quittung** (Zustellbestätigung durch die Teltonika-API) gibt
+  es nicht und ist auch nicht in Aussicht.
 
 ## SMS-Empfangs-Verhalten
 

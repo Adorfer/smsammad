@@ -176,7 +176,7 @@ def _build_send_note(
     parts_label = "1 SMS" if len(parts) == 1 else f"{len(parts)} SMS-Teile"
     header = (
         f"SMS-Versand: {len(text)} Zeichen, {parts_label} am {now_str} an den Router "
-        f"uebergeben (keine Zustellbestaetigung durch die Teltonika-API verfuegbar)."
+        f"uebergeben (keine SMS-Quittung verfuegbar)."
     )
     sent_text = "\n".join(f'"{part}"' for part in parts)
     note = f"{header}\n\nGesendeter Text:\n{sent_text}"
