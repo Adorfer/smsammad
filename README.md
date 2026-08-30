@@ -115,7 +115,7 @@ komplett.
 
 Und warum dann ausgerechnet ein vergleichsweise teurer industrieller
 Router statt einer günstigeren Hardware-Lösung? Zwei naheliegende
-Alternativen wurden vorher ausprobiert und wieder verworfen:
+Alternativen wurden ausprobiert und wieder verworfen:
 
 - **Altes Smartphone dauerhaft am USB-Kabel**: scheitert mittelfristig an
   der Akku-Problematik -- ein Akku, der dauerhaft am Ladegerät hängt,
@@ -134,8 +134,11 @@ Alternativen wurden vorher ausprobiert und wieder verworfen:
 Ein industrieller Router wie der RUT240 ist dagegen für exakt diesen
 Einsatzzweck gebaut: dauerbetriebstauglich (kein Akku), robuste
 Bauform, externe Antennenanschlüsse (löst das Empfangsproblem im
-Keller), und eine langzeitstabile, dokumentierte (wenn auch lückenhafte,
-siehe unten) API.
+Keller), verriegelter Netzteilanschluss und eine langzeitstabile, 
+dokumentierte (wenn auch lückenhafte, siehe unten) API.
+
+P.S.: Tupperdose voll alter und neuer USB-Dongles, 'ungeprüft', gegen Gebot... :-) 
+
 
 ### Warum HTTP-API statt E-Mail/POP3
 
