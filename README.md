@@ -130,11 +130,12 @@ Alternativen wurden ausprobiert und wieder verworfen:
   virtuelle Netzwerkkarte für den Internetzugang, keinen AT-Kommando-
   Zugriff mehr).
 
-Ein industrieller Router wie der RUT240 ist dagegen für exakt diesen
-Einsatzzweck gebaut: dauerbetriebstauglich (kein Akku), robuste
-Bauform, externe Antennenanschlüsse (löst das Empfangsproblem im
-Keller), verriegelter Netzteilanschluss und eine langzeitstabile, 
-dokumentierte (wenn auch lückenhafte, siehe unten) API.
+Ein industrieller Router von [Teltonika](https://teltonika-networks.com/)
+wie der RUT240 ist dagegen für exakt diesen Einsatzzweck gebaut:
+dauerbetriebstauglich (kein Akku), robuste Bauform, externe
+Antennenanschlüsse (löst das Empfangsproblem im Keller), verriegelter
+Netzteilanschluss und eine langzeitstabile, dokumentierte (wenn auch
+lückenhafte, siehe unten) API.
 
 P.S.: Tupperdose voll alter und neuer USB-Dongles, 'ungeprüft', gegen Gebot... :-) 
 
