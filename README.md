@@ -213,6 +213,25 @@ Live gegen ein echtes RUT240 verifiziert (siehe `teltonika.py`):
   Test gerade noch akzeptiert hat -- ein "Yolo-Modus" mit den empirisch
   ermittelten (aber unzuverlässigen) Werten wurde bewusst **nicht**
   eingebaut.
+- **Automatischer Retry bei Router-Überlastung** (`[teltonika]
+  retry_max_attempts`/`retry_first_delay_seconds`/`retry_delay_seconds`,
+  Default 3 Versuche nach 20s/180s/180s): live reproduziert, dass ein
+  anderweitig CPU-beschäftigter Router (siehe CPU-Vermutung oben) auf
+  **lesende** Anfragen (`sms_list`/`sms_total`/...) mit HTTP 200 und
+  Klartext-Body `"ERROR"`/`"TIMEOUT"` statt echten Daten antwortet, statt
+  einen Fehlerstatus zu liefern -- `teltonika.py` erkennt das jetzt als
+  transientes Signal und wartet/versucht erneut, statt sofort
+  aufzugeben. Deckt auch einen langsamen TCP-Connect/Verbindungsabbruch
+  zum Router ab (`requests.RequestException`-Subklassen). Lange
+  Wartezeiten sind unproblematisch, weil `cron_run.sh` überlappende
+  Läufe **desselben** Tasks per `flock` ohnehin verhindert (der nächste
+  Cronlauf wird einfach übersprungen, nicht parallel gestartet). **Nicht**
+  betroffen: `sms_send` (Versand) -- ein Retry nach einem clientseitigen
+  Timeout könnte eine tatsächlich schon versendete SMS ein zweites Mal
+  verschicken (siehe die doppelte Zustellung oben); ein fehlgeschlagener
+  Versand landet stattdessen wie gehabt über `sms-cannotsend` sichtbar
+  beim Agenten (siehe
+  [SMS-Versand-Verhalten](#sms-versand-verhalten)).
 
 ### Credential-Sicherheit beim Teltonika-Zugriff
 

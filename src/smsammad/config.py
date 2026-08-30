@@ -47,6 +47,19 @@ class TeltonikaConfig:
     # Sendeziel verwendet -- ermoeglicht auch Antworten an Kurzwahlen/
     # alphanumerische Absender. Leer = roher Absender-String ohne Praefix.
     unresolved_sender_prefix: str = "Kurzwahl:"
+    # Live beobachtet: ist der Router anderweitig CPU-beschaeftigt (z.B.
+    # eigener sehr langer Multipart-SMS-Versand, siehe README), antworten
+    # lesende cgi-bin-Endpunkte (sms_list/sms_total/...) manchmal mit
+    # HTTP 200 und Klartext-Body "ERROR"/"TIMEOUT" statt echten Daten,
+    # oder die Verbindung laeuft in ein Timeout. Automatischer Retry nur
+    # fuer LESENDE Endpunkte (sms_send/POST bewusst ausgenommen -- ein
+    # erneuter Versand nach einem clientseitigen Timeout koennte eine
+    # bereits tatsaechlich versendete SMS ein zweites Mal verschicken,
+    # live einmal genau so beobachtet). retry_max_attempts=0 deaktiviert
+    # den Retry komplett.
+    retry_max_attempts: int = 3
+    retry_first_delay_seconds: float = 20.0
+    retry_delay_seconds: float = 180.0
 
 
 @dataclass
@@ -279,6 +292,13 @@ def load_config(path: Path | None = None) -> Config:
             short_number_prefix=_get(parser, "teltonika", "short_number_prefix", fallback=""),
             unresolved_sender_prefix=_get(
                 parser, "teltonika", "unresolved_sender_prefix", fallback="Kurzwahl:"
+            ),
+            retry_max_attempts=_get_int(parser, "teltonika", "retry_max_attempts", fallback=3),
+            retry_first_delay_seconds=_get_float(
+                parser, "teltonika", "retry_first_delay_seconds", fallback=20.0
+            ),
+            retry_delay_seconds=_get_float(
+                parser, "teltonika", "retry_delay_seconds", fallback=180.0
             ),
         )
         zammad = ZammadConfig(

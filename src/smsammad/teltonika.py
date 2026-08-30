@@ -19,6 +19,7 @@ nicht benutzt) und folgen hier testweise demselben Format.
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 import requests
@@ -30,6 +31,11 @@ logger = logging.getLogger("smsammad")
 
 _FIELD_RE = re.compile(r"^(Index|Date|Sender|Text|Status):[ \t]?(.*)$")
 _SEPARATOR_RE = re.compile(r"\n-{3,}\n?")
+# Live beobachtet (siehe TeltonikaConfig.retry_*): ist der Router
+# anderweitig CPU-beschaeftigt, antworten lesende cgi-bin-Endpunkte
+# manchmal mit HTTP 200 und genau diesem Klartext-Body statt echten
+# Daten -- ein Ueberlastungssignal, kein echter Datenfehler.
+_BUSY_RESPONSE_BODIES = frozenset({"ERROR", "TIMEOUT"})
 
 
 class TeltonikaError(Exception):
@@ -89,7 +95,7 @@ class TeltonikaClient:
     def _auth_params(self) -> dict[str, str]:
         return {"username": self._config.username, "password": self._config.password}
 
-    def _get(self, endpoint: str, **params: str) -> requests.Response:
+    def _get_once(self, endpoint: str, **params: str) -> requests.Response:
         # Absichtlich ohne "raise ... from exc": die Original-Exception (und
         # jede Kette bis zu urllib3) enthaelt die volle URL inkl.
         # username/password als Query-Parameter (von der Teltonika-API so
@@ -111,6 +117,49 @@ class TeltonikaClient:
                 f"{endpoint} lieferte HTTP {response.status_code}: {response.text!r}"
             )
         return response
+
+    def _get(self, endpoint: str, **params: str) -> requests.Response:
+        """Wie _get_once, aber mit automatischem Retry bei transienten
+        Router-Ueberlastungs-Symptomen (Timeout, oder HTTP 200 mit Body
+        "ERROR"/"TIMEOUT" statt echter Daten -- siehe
+        TeltonikaConfig.retry_*). NUR fuer lesende Endpunkte: sms_send
+        (POST, siehe _post/send) ist bewusst AUSGENOMMEN -- ein Retry nach
+        einem clientseitigen Timeout koennte eine tatsaechlich schon
+        versendete SMS ein zweites Mal verschicken (live genau so
+        beobachtet, siehe README).
+        """
+        max_attempts = self._config.retry_max_attempts + 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = self._get_once(endpoint, **params)
+            except TeltonikaError as exc:
+                error: Exception = exc
+            else:
+                if response.text.strip().upper() not in _BUSY_RESPONSE_BODIES:
+                    return response
+                error = TeltonikaError(
+                    f"{endpoint} meldet moegliche Router-Ueberlastung: {response.text!r}"
+                )
+
+            if attempt == max_attempts:
+                raise error
+
+            delay = (
+                self._config.retry_first_delay_seconds
+                if attempt == 1
+                else self._config.retry_delay_seconds
+            )
+            logger.warning(
+                "Anfrage an %s fehlgeschlagen (Versuch %d/%d): %s -- naechster Versuch in %.0fs",
+                endpoint,
+                attempt,
+                max_attempts,
+                error,
+                delay,
+            )
+            time.sleep(delay)
+
+        raise AssertionError("unreachable")  # Schleife liefert oder wirft immer vorher
 
     def _post(self, endpoint: str, timeout: float, **params: str) -> requests.Response:
         # POST statt GET, weil laengerer `text` als Query-String live HTTP

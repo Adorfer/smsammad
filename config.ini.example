@@ -47,6 +47,17 @@ short_number_prefix = "0172"
 ; Kurzwahlen/alphanumerische Absender. Leer lassen, um stattdessen den rohen
 ; Absender-String ohne Praefix zu speichern.
 unresolved_sender_prefix = "Kurzwahl:"
+; Automatischer Retry bei transienten Router-Ueberlastungs-Symptomen: der
+; Router antwortet auf lesende Anfragen (sms_list/sms_total/...) manchmal
+; mit HTTP 200 + Klartext-Body "ERROR"/"TIMEOUT" statt echten Daten, wenn
+; er anderweitig CPU-beschaeftigt ist (z.B. eigener sehr langer Multipart-
+; SMS-Versand, siehe README) -- live so beobachtet. Deckt auch langsamen
+; TCP-Connect/Verbindungsabbruch zum Router ab. NUR fuer lesende Endpunkte
+; -- sms_send (Versand) wird NIE automatisch wiederholt, siehe README.
+; retry_max_attempts = 0 deaktiviert den Retry komplett.
+retry_max_attempts = 3
+retry_first_delay_seconds = 20
+retry_delay_seconds = 180
 
 [zammad]
 ; Basis-URL der Zammad-Instanz, ohne /api/v1
