@@ -1,0 +1,17 @@
+# Kein vollstaendiges docker-compose.override.yml -- der Host hat schon
+# eines (mit dem ai_max_tokens.rb-Mount). Diese Zeile pro Service unter
+# volumes: ergaenzen (zammad-railsserver, zammad-scheduler,
+# zammad-websocket), analog zum bestehenden Mount-Muster:
+#
+#   zammad-railsserver:
+#     volumes:
+#       - ./zammad-overrides/ai_max_tokens.rb:/opt/zammad/config/initializers/zz_ai_max_tokens.rb:ro
+#       - ./zammad-overrides/teltonika.rb:/opt/zammad/app/models/channel/driver/sms/teltonika.rb:ro
+#   zammad-scheduler:
+#     volumes:
+#       - ./zammad-overrides/ai_max_tokens.rb:/opt/zammad/config/initializers/zz_ai_max_tokens.rb:ro
+#       - ./zammad-overrides/teltonika.rb:/opt/zammad/app/models/channel/driver/sms/teltonika.rb:ro
+#   zammad-websocket:
+#     volumes:
+#       - ./zammad-overrides/ai_max_tokens.rb:/opt/zammad/config/initializers/zz_ai_max_tokens.rb:ro
+#       - ./zammad-overrides/teltonika.rb:/opt/zammad/app/models/channel/driver/sms/teltonika.rb:ro
