@@ -27,9 +27,11 @@ class FakeTeltonika:
 
 
 class FakeZammad:
-    def __init__(self, existing_customers=None, open_ticket=None):
+    def __init__(self, existing_customers=None, open_ticket=None, last_ticket=None, ticket_groups=None):
         self._existing_customers = existing_customers or {}
         self._open_ticket = open_ticket
+        self._last_ticket = last_ticket
+        self._ticket_groups = ticket_groups or {}
         self.created_tickets = []
         self.added_articles = []
         self.article_calls = []
@@ -50,8 +52,11 @@ class FakeZammad:
     def find_open_ticket_for_customer(self, customer_id):
         return self._open_ticket
 
+    def find_last_ticket_for_customer(self, customer_id):
+        return self._last_ticket
+
     def get_ticket(self, ticket_id):
-        return {"group_id": 42}
+        return {"group_id": self._ticket_groups.get(ticket_id, 42)}
 
     def get_group_name(self, group_id):
         return f"Gruppe-{group_id}"
@@ -94,7 +99,9 @@ class FakeBudget:
         self.balances.append(amount_eur)
 
 
-def _config(short_number_prefix="", unresolved_sender_prefix="", balance=None):
+def _config(
+    short_number_prefix="", unresolved_sender_prefix="", balance=None, group_from_last_ticket=False
+):
     return Config(
         teltonika=TeltonikaConfig(
             host="h",
@@ -107,6 +114,7 @@ def _config(short_number_prefix="", unresolved_sender_prefix="", balance=None):
         zammad=ZammadConfig(
             url="https://z", token="t", group="Users", new_customer_group="Triage",
             phone_field="mobile", overflow_priority=3,
+            group_from_last_ticket=group_from_last_ticket,
         ),
         ticket_to_sms=TicketToSmsConfig(
             max_sms_parts=3,
@@ -204,6 +212,51 @@ def test_known_customer_without_open_ticket_uses_normal_group():
     assert teltonika.deleted == [2]
 
 
+def test_known_customer_without_open_ticket_uses_last_ticket_group_when_enabled():
+    """Kundenzentrisch arbeitende Teams: neues Ticket landet in der Queue
+    des zuletzt kontaktierten (auch laengst geschlossenen) Tickets, nicht
+    in der festen Default-Gruppe."""
+
+    class LastTicket:
+        id = 9
+        number = "1009"
+
+    teltonika = FakeTeltonika([SmsMessage(index=2, sender="0151 12345678", text="Hallo")])
+    zammad = FakeZammad(
+        existing_customers={"+4915112345678": 42},
+        last_ticket=LastTicket(),
+        ticket_groups={9: 77},
+    )
+
+    sms_to_ticket.run(
+        teltonika, zammad, _config(group_from_last_ticket=True), dry_run=False, budget=FakeBudget()
+    )
+
+    assert zammad.created_tickets == [(42, "Gruppe-77", "Neues SMS-Ticket: Hallo", "Hallo")]
+
+
+def test_known_customer_without_any_ticket_falls_back_to_default_group_even_when_enabled():
+    teltonika = FakeTeltonika([SmsMessage(index=2, sender="0151 12345678", text="Hallo")])
+    zammad = FakeZammad(existing_customers={"+4915112345678": 42}, last_ticket=None)
+
+    sms_to_ticket.run(
+        teltonika, zammad, _config(group_from_last_ticket=True), dry_run=False, budget=FakeBudget()
+    )
+
+    assert zammad.created_tickets == [(42, "Users", "Neues SMS-Ticket: Hallo", "Hallo")]
+
+
+def test_new_customer_ignores_group_from_last_ticket_setting():
+    teltonika = FakeTeltonika([SmsMessage(index=1, sender="0151 12345678", text="Hallo")])
+    zammad = FakeZammad()
+
+    sms_to_ticket.run(
+        teltonika, zammad, _config(group_from_last_ticket=True), dry_run=False, budget=FakeBudget()
+    )
+
+    assert zammad.created_tickets == [(1000, "Triage", "Neues SMS-Ticket: Hallo", "Hallo")]
+
+
 def test_open_ticket_gets_article_instead_of_new_ticket():
     class Ticket:
         id = 9
@@ -231,6 +284,27 @@ def test_dry_run_deletes_nothing():
 
     assert zammad.created_tickets == []
     assert teltonika.deleted == []
+
+
+def test_dry_run_logs_last_ticket_group_when_enabled(caplog):
+    class LastTicket:
+        id = 9
+        number = "1009"
+
+    teltonika = FakeTeltonika([SmsMessage(index=2, sender="0151 12345678", text="Hallo")])
+    zammad = FakeZammad(
+        existing_customers={"+4915112345678": 42},
+        last_ticket=LastTicket(),
+        ticket_groups={9: 77},
+    )
+
+    with caplog.at_level("INFO"):
+        sms_to_ticket.run(
+            teltonika, zammad, _config(group_from_last_ticket=True), dry_run=True, budget=FakeBudget()
+        )
+
+    assert "Gruppe-77" in caplog.text
+    assert zammad.created_tickets == []
 
 
 def test_dry_run_log_does_not_leak_sms_content(caplog):

@@ -46,6 +46,14 @@ class ZammadConfig:
     new_customer_group: str
     phone_field: str
     overflow_priority: int
+    # Fuer ein neues Ticket eines BEKANNTEN Kunden ohne offenes Ticket:
+    # False (Default) -- immer die feste Gruppe `group`. True -- Gruppe
+    # des zuletzt kontaktierten Tickets dieses Kunden wiederverwenden
+    # (egal ob offen/geschlossen/zusammengefuehrt), Fallback auf `group`
+    # falls der Kunde noch gar kein Ticket hatte. Sinnvoll fuer
+    # kundenzentrisch arbeitende Teams ("one face to the customer"), bei
+    # denen granulare Einordnung ueber Tags statt Queues laeuft.
+    group_from_last_ticket: bool = False
 
 
 @dataclass
@@ -196,6 +204,9 @@ def load_config(path: Path | None = None) -> Config:
             new_customer_group=_get(parser, "zammad", "new_customer_group", fallback="Users"),
             phone_field=_get(parser, "zammad", "phone_field", fallback="mobile"),
             overflow_priority=parser.getint("zammad", "overflow_priority", fallback=3),
+            group_from_last_ticket=parser.getboolean(
+                "zammad", "group_from_last_ticket", fallback=False
+            ),
         )
         stats_db_file_raw = _get(
             parser, "ticket_to_sms", "stats_db_file", fallback=str(DEFAULT_STATS_DB_FILE)

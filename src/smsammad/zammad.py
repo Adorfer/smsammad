@@ -152,6 +152,31 @@ class ZammadClient:
             last_contact_at=newest.get("last_contact_at"),
         )
 
+    def find_last_ticket_for_customer(self, customer_id: int) -> Ticket | None:
+        """Wie find_open_ticket_for_customer, aber OHNE den Offen-Filter --
+        liefert das zuletzt kontaktierte Ticket ueberhaupt (auch
+        geschlossen/zusammengefuehrt). Fuer `group_from_last_ticket`:
+        kundenzentrisch arbeitende Teams wollen ein neues Ticket eines
+        bekannten Kunden in dessen gewohnter Queue landen sehen, nicht in
+        einer festen Default-Gruppe."""
+        results = (
+            self._request(
+                "GET",
+                "tickets/search",
+                params={"query": f"customer_id:{customer_id}", "expand": "true"},
+            )
+            or []
+        )
+        if not results:
+            return None
+        newest = max(results, key=lambda t: t.get("last_contact_at") or "")
+        return Ticket(
+            id=newest["id"],
+            number=newest["number"],
+            state=newest["state"],
+            last_contact_at=newest.get("last_contact_at"),
+        )
+
     def create_ticket(self, customer_id: int, group: str, subject: str, body: str) -> int:
         created = self._request(
             "POST",

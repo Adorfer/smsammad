@@ -168,6 +168,28 @@ def test_find_open_ticket_none_when_all_closed(client):
 
 
 @responses.activate
+def test_find_last_ticket_picks_newest_regardless_of_state(client):
+    """Anders als find_open_ticket_for_customer: das zuletzt kontaktierte
+    Ticket zaehlt, auch wenn es laengst geschlossen ist."""
+    responses.add(
+        responses.GET,
+        f"{BASE}/tickets/search",
+        json=[
+            {"id": 1, "number": "1001", "state": "open", "last_contact_at": "2026-01-01T00:00:00Z"},
+            {"id": 2, "number": "1002", "state": "closed", "last_contact_at": "2026-08-01T00:00:00Z"},
+        ],
+    )
+    ticket = client.find_last_ticket_for_customer(42)
+    assert ticket.id == 2
+
+
+@responses.activate
+def test_find_last_ticket_none_when_no_tickets_exist(client):
+    responses.add(responses.GET, f"{BASE}/tickets/search", json=[])
+    assert client.find_last_ticket_for_customer(42) is None
+
+
+@responses.activate
 def test_search_tickets_by_tag(client):
     responses.add(
         responses.GET, f"{BASE}/tickets/search", json=[{"id": 5}, {"id": 6}]

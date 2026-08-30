@@ -43,11 +43,21 @@ unresolved_sender_prefix = "Kurzwahl:"
 url = "https://zammad.example.local"
 ; Access Token eines API-Users mit Rechten fuer Ticket/Artikel/Tag/User-Objekte
 token = "CHANGEME"
-; Gruppe fuer neue Tickets von bereits bekannten Kunden
+; Gruppe fuer neue Tickets von bereits bekannten Kunden OHNE offenes Ticket
+; -- Default/Fallback, falls group_from_last_ticket unten deaktiviert ist
+; oder der Kunde noch gar kein Ticket hatte.
 group = "Users"
 ; Gruppe fuer neue Tickets von SMS-Absendern ohne bestehenden Zammad-Kunden
 ; (eigene Triage-Queue zur manuellen Sichtung)
 new_customer_group = "SMS-Eingang-Unbekannt"
+; false (Default): neues Ticket eines bekannten Kunden ohne offenes Ticket
+; landet immer in der festen Gruppe `group` oben.
+; true: landet stattdessen in der Gruppe seines zuletzt kontaktierten
+; Tickets (egal ob offen/geschlossen/zusammengefuehrt) -- sinnvoll fuer
+; kundenzentrisch arbeitende Teams ("one face to the customer"), bei denen
+; granulare Einordnung ueber Tags statt Queues laeuft. Fallback auf
+; `group`, falls der Kunde noch gar kein Ticket hatte.
+group_from_last_ticket = false
 ; Zammad-Nutzerfeld, das die Mobilnummer enthaelt
 phone_field = "mobile"
 ; Prioritaets-ID, die bei SMS-Ueberlauf (zu viele Teile) gesetzt wird

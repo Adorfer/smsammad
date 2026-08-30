@@ -521,16 +521,22 @@ zusammengeführt).
 
 - **Komplett neuer Kunde** → Gruppe aus `[zammad] new_customer_group`
   (die "unbekannt"/Triage-Queue).
-- **Bekannter Kunde ohne offenes Ticket** → Gruppe aus `[zammad] group`
-  -- **immer** diese eine feste Default-Gruppe, **unabhängig davon**, in
-  welcher Queue frühere (geschlossene) Tickets dieses Kunden lagen! Es
-  gibt aktuell **keine** Logik, die die Queue des zuletzt aktiven/
-  bearbeiteten Tickets wiederverwendet. Beispiel: War das letzte Ticket
-  eines Kunden in der Queue "Technik" und wurde geschlossen, landet die
-  nächste SMS desselben Kunden trotzdem in der allgemeinen
-  Default-Gruppe (`[zammad] group`), nicht automatisch wieder in
-  "Technik". Falls das fachlich nicht passt: bitte manuell in die
-  richtige Queue verschieben.
+- **Bekannter Kunde ohne offenes Ticket** → per `[zammad]
+  group_from_last_ticket` konfigurierbar:
+  - **`false`** (Default): **immer** die feste Gruppe aus `[zammad]
+    group`, **unabhängig davon**, in welcher Queue frühere (geschlossene)
+    Tickets dieses Kunden lagen. Beispiel: War das letzte Ticket eines
+    Kunden in der Queue "Technik" und wurde geschlossen, landet die
+    nächste SMS desselben Kunden trotzdem in der allgemeinen
+    Default-Gruppe, nicht automatisch wieder in "Technik".
+  - **`true`**: die neue SMS landet in der Gruppe des **zuletzt
+    kontaktierten** Tickets dieses Kunden (egal ob offen, geschlossen
+    oder zusammengeführt) -- passend für kundenzentrisch arbeitende Teams
+    ("one face to the customer"), bei denen granulare Einordnung über
+    Tags statt über Queues läuft. Hatte der Kunde noch nie ein Ticket,
+    greift trotzdem der Fallback auf `[zammad] group`.
+  - Falls das Ergebnis (in beiden Modi) fachlich nicht passt: bitte
+    manuell in die richtige Queue verschieben.
 
 ## Für Zammad-Admins: SMSammad-User einrichten
 

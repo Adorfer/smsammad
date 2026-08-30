@@ -33,6 +33,29 @@ def _subject_excerpt(text: str, limit: int = 50) -> str:
     return text[: limit - 4] + "[..]"
 
 
+def _resolve_new_ticket_group(
+    customer_id: int | None, was_created: bool, zammad: ZammadClient, config: Config
+) -> str:
+    """Gruppe fuer ein neu anzulegendes Ticket (kein offenes Ticket
+    vorhanden). Neuer Kunde -> new_customer_group. Bekannter Kunde -> per
+    Default die feste `group` (Alt-Verhalten), oder -- falls
+    `group_from_last_ticket` gesetzt ist -- die Gruppe seines zuletzt
+    kontaktierten Tickets (offen oder geschlossen), fuer
+    kundenzentrisch arbeitende Teams. Fallback auf `group`, falls der
+    Kunde noch gar kein Ticket hatte oder dessen Gruppe nicht ermittelbar
+    ist."""
+    if was_created:
+        return config.zammad.new_customer_group
+    if config.zammad.group_from_last_ticket and customer_id is not None:
+        last_ticket = zammad.find_last_ticket_for_customer(customer_id)
+        if last_ticket is not None:
+            last_ticket_full = zammad.get_ticket(last_ticket.id)
+            group_id = last_ticket_full.get("group_id")
+            if group_id:
+                return zammad.get_group_name(group_id)
+    return config.zammad.group
+
+
 def run(
     teltonika: TeltonikaClient,
     zammad: ZammadClient,
@@ -156,7 +179,7 @@ def _process_one(
                 redact_content(body),
             )
         else:
-            group = config.zammad.new_customer_group if was_created else config.zammad.group
+            group = _resolve_new_ticket_group(customer_id, was_created, zammad, config)
             logger.info(
                 "[dry-run] wuerde neues Ticket in Gruppe %r anlegen: %r", group, redact_content(body)
             )
@@ -186,7 +209,7 @@ def _process_one(
         )
         budget.record_received(group=group_name, ticket_number=open_ticket.number)
     else:
-        group = config.zammad.new_customer_group if was_created else config.zammad.group
+        group = _resolve_new_ticket_group(customer_id, was_created, zammad, config)
         # Betreff mit Textauszug statt festem Platzhalter: neuer Kunde ODER
         # Kunde hat nur geschlossene Tickets (kein offenes/neues/wartendes)
         # -- in beiden Faellen wird hier neu angelegt.
