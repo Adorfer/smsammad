@@ -8,13 +8,12 @@ als SMS-Gateway: bidirektional, beide Richtungen über die jeweilige
 HTTP-API (kein E-Mail-/POP3-Bezug, siehe
 [Warum HTTP-API statt E-Mail/POP3](#warum-http-api-statt-e-mailpop3)).
 
-[Zammad](https://zammad.org/) ist ein quelloffenes, selbst gehostetes
-Ticket-/Helpdesk-System der deutschen Zammad GmbH; im Umfeld des Autors
-wird es seit Jahren erfolgreich selfhosted in mehreren Projekten
-eingesetzt. 
+Zammad ist ein quelloffenes, selbst gehostetes Ticket-/Helpdesk-System der
+deutschen [Zammad GmbH](https://zammad.com/); im Umfeld des Autors wird es
+seit Jahren erfolgreich selfhosted in mehreren Projekten eingesetzt.
 
-Der [Teltonika RUT240](https://teltonika-networks.com/products/routers/rut240)
-ist ein kompakter industrieller 4G/LTE-Router mit SIM-Karten-Steckplatz,
+Der Teltonika RUT240 ist ein kompakter industrieller 4G/LTE-Router mit
+SIM-Karten-Steckplatz,
 der über seine Web-API u.a. auch als SMS-Gateway ansprechbar ist (SMS
 senden/empfangen/verwalten über das eingebaute Mobilfunkmodem) — genau
 diese Funktion nutzt dieses Projekt.
