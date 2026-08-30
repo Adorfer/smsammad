@@ -1,5 +1,6 @@
 """POSIX-artiges Logging mit Prozess-ID, Level per --verbose steuerbar."""
 
+import codecs
 import logging
 import os
 
@@ -23,7 +24,9 @@ def redact_content(text: str, keep: int = 5) -> str:
     """Fuer Logs: SMS-/Ticket-INHALTE (nicht Rufnummern) nach den ersten
     `keep` Zeichen mit '#' ueberschreiben, damit volle Nachrichtentexte
     nicht im Klartext in /var/log landen (Laenge bleibt sichtbar, hilft
-    beim Debuggen ohne den Inhalt preiszugeben)."""
-    if len(text) <= keep:
-        return text
-    return text[:keep] + "#" * (len(text) - keep)
+    beim Debuggen ohne den Inhalt preiszugeben). Die sichtbar bleibenden
+    ersten `keep` Zeichen werden zusaetzlich ROT13-"verschluesselt" -- kein
+    echter Schutz (trivial umkehrbar), aber sie werden beim ueberfliegen
+    eines Logs nicht mehr unbewusst mitgelesen."""
+    visible = codecs.encode(text[:keep], "rot_13")
+    return visible + "#" * max(len(text) - keep, 0)

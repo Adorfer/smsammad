@@ -357,8 +357,11 @@ hinterlassen, bevor das korrigiert wurde.
 
 SMS-/Ticket-**Inhalte** (nicht Rufnummern) werden im Log ab dem 5. Zeichen
 mit `#` überschrieben (`logging_setup.redact_content`) — Länge bleibt für
-Debugging sichtbar, der Inhalt selbst nicht. Hintergrund: Logs landen
-unter `/var/log/`, das potenziell einen größeren Adminkreis erreicht als
+Debugging sichtbar, der Inhalt selbst nicht. Die verbleibenden sichtbaren
+ersten 5 Zeichen sind zusätzlich **ROT13**-verschlüsselt: kein echter
+Schutz (trivial umkehrbar), aber sie werden beim Überfliegen eines Logs
+nicht mehr unbewusst mitgelesen. Hintergrund: Logs landen unter
+`/var/log/`, das potenziell einen größeren Adminkreis erreicht als
 Zammad/Mailserver-Zugriff selbst.
 
 ## Setup

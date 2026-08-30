@@ -1,3 +1,4 @@
+import codecs
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -374,7 +375,10 @@ def test_dry_run_log_does_not_leak_sms_content(caplog):
 
     log_text = caplog.text
     assert secret_text not in log_text
-    assert secret_text[:5] in log_text
+    # die sichtbaren ersten 5 Zeichen sind ROT13-verschluesselt, nicht
+    # im Klartext -- sonst waeren sie beim Ueberfliegen des Logs lesbar.
+    assert secret_text[:5] not in log_text
+    assert codecs.encode(secret_text[:5], "rot_13") in log_text
 
 
 def test_overflow_sets_tag_and_note_instead_of_sending():
