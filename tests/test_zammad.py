@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 import pytest
 import responses
@@ -7,6 +8,15 @@ from smsammad.config import ZammadConfig
 from smsammad.zammad import ZammadClient, ZammadError
 
 BASE = "https://zammad.example.local/api/v1"
+
+
+@pytest.fixture(autouse=True)
+def no_real_sleep():
+    """Der Retry-Fallback in find_or_create_customer_by_phone wartet
+    zwischen Versuchen echt (Indexierungs-Verzoegerung) -- in Tests nicht
+    noetig/gewuenscht."""
+    with patch("smsammad.zammad.time.sleep"):
+        yield
 
 
 @pytest.fixture
@@ -98,6 +108,66 @@ def test_find_existing_customer_with_alphanumeric_sender_id(client):
         responses.GET, f"{BASE}/users/search", json=[{"id": 66, "mobile": "Kurzwahl:CALLYA"}]
     )
     assert client.find_customer_by_phone("Kurzwahl:CALLYA", "DE") == 66
+
+
+@responses.activate
+def test_find_existing_customer_with_different_pseudo_id_separator(client):
+    """Regression: unresolved_sender_prefix wurde von 'Kurzwahl-' auf
+    'Kurzwahl:' umgestellt -- ein Kunde aus der Zeit davor
+    ('Kurzwahl-224466') muss trotzdem als Treffer fuer die neue Suche
+    ('Kurzwahl:224466') erkannt werden, auch wenn beides keine echte
+    Rufnummer ist (to_e164() kann hier nicht normalisieren)."""
+    responses.add(
+        responses.GET, f"{BASE}/users/search", json=[{"id": 61, "mobile": "Kurzwahl-224466"}]
+    )
+    assert client.find_customer_by_phone("Kurzwahl:224466", "DE") == 61
+
+
+@responses.activate
+def test_create_race_finds_customer_with_different_pseudo_id_separator(client):
+    """Ende-zu-Ende: Anlage kollidiert (Login von einem Kurzwahl-Kunden
+    mit altem Trennzeichen existiert schon), erste Suche findet ihn nicht
+    (z.B. weil die naive Token-Suche ihn nicht als Kandidaten liefert),
+    der Retry-Fallback muss ihn trotzdem finden."""
+    responses.add(responses.GET, f"{BASE}/users/search", json=[])
+    responses.add(
+        responses.POST,
+        f"{BASE}/users",
+        json={"error": "Login has already been taken", "error_human": "Login has already been taken"},
+        status=422,
+    )
+    responses.add(
+        responses.GET, f"{BASE}/users/search", json=[{"id": 61, "mobile": "Kurzwahl-224466"}]
+    )
+
+    customer_id, was_created = client.find_or_create_customer_by_phone("Kurzwahl:224466", "DE")
+
+    assert (customer_id, was_created) == (61, False)
+
+
+@responses.activate
+def test_create_race_retry_waits_between_attempts_for_index_lag(client):
+    """Erste zwei Nach-Suchen leer (Indexierungs-Verzoegerung), dritte
+    findet den Kunden -- muss trotzdem noch als Erfolg durchgehen, nicht
+    schon nach dem ersten erfolglosen Retry aufgeben."""
+    responses.add(responses.GET, f"{BASE}/users/search", json=[])
+    responses.add(
+        responses.POST,
+        f"{BASE}/users",
+        json={"error": "Login has already been taken", "error_human": "Login has already been taken"},
+        status=422,
+    )
+    responses.add(responses.GET, f"{BASE}/users/search", json=[])
+    responses.add(responses.GET, f"{BASE}/users/search", json=[])
+    responses.add(
+        responses.GET, f"{BASE}/users/search", json=[{"id": 61, "mobile": "+4915112345678"}]
+    )
+
+    with patch("smsammad.zammad.time.sleep") as sleep_mock:
+        customer_id, was_created = client.find_or_create_customer_by_phone("+4915112345678", "DE")
+
+    assert (customer_id, was_created) == (61, False)
+    assert sleep_mock.call_count == 2
 
 
 @responses.activate

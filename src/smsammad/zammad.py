@@ -1,6 +1,7 @@
 """Client fuer die Zammad-REST-API (nur die fuer diese Kopplung noetigen Teile)."""
 
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,18 +15,34 @@ class ZammadError(Exception):
     pass
 
 
+def _normalize_for_dedup(value: str) -> str:
+    """Entfernt alle nicht-alphanumerischen Zeichen und normalisiert auf
+    Kleinschreibung -- letzte, grosszuegigste Vergleichsstufe in
+    _phone_matches(). Faengt z.B. "Kurzwahl-224466" vs. "Kurzwahl:224466"
+    ab (unterschiedliches Trennzeichen nach einer Aenderung an
+    unresolved_sender_prefix in der config.ini): beides sind keine echten
+    Rufnummern, to_e164() kann sie nie normalisieren, waeren also sonst
+    dauerhaft als "verschiedene" Kunden erkannt, obwohl dieselbe Kurzwahl
+    gemeint ist."""
+    return re.sub(r"[^0-9A-Za-z]", "", value).lower()
+
+
 def _phone_matches(raw_value: str, target_e164: str, default_region: str) -> bool:
     """Vergleicht eine roh in Zammad gespeicherte Rufnummer (beliebig
     formatiert, z.B. "+49 172 1234567") mit einer bereits normalisierten
     Ziel-Nummer. Exakter Treffer zuerst (deckt unsere eigenen "Kurzwahl:..."-
-    Werte ab, die immer gleich formatiert sind), sonst Vergleich ueber
-    phonenumbers-Normalisierung."""
+    Werte ab, die immer gleich formatiert sind), dann Vergleich ueber
+    phonenumbers-Normalisierung, zuletzt satzzeichen-unabhaengiger
+    Vergleich (siehe _normalize_for_dedup) fuer Pseudo-Identifikatoren."""
     if raw_value == target_e164:
         return True
     try:
-        return to_e164(raw_value, default_region) == target_e164
+        if to_e164(raw_value, default_region) == target_e164:
+            return True
     except PhoneNumberError:
-        return False
+        pass
+    normalized_target = _normalize_for_dedup(target_e164)
+    return bool(normalized_target) and _normalize_for_dedup(raw_value) == normalized_target
 
 
 def _search_token(value: str) -> str:
@@ -123,14 +140,31 @@ class ZammadClient:
         except ZammadError as exc:
             if "Login has already been taken" not in str(exc):
                 raise
-            # Race: zwischen Suche und Anlage wurde derselbe Kunde bereits
-            # angelegt (z.B. durch eine vorherige SMS im selben Lauf) und die
-            # Suche hat ihn wegen Indexierungs-Verzoegerung noch nicht
-            # gefunden -- erneut suchen statt mit Fehler abzubrechen.
-            existing = self.find_customer_by_phone(e164_number, default_region)
+            # Zammad kennt den Login bereits, unsere Suche hat ihn aber nicht
+            # gefunden. Zwei bekannte Gruende: (1) Race -- derselbe Kunde
+            # wurde gerade erst angelegt (z.B. durch eine vorherige SMS im
+            # selben Lauf) und Zammads Suchindex (near-realtime, nicht
+            # sofort konsistent) hat das noch nicht erfasst -- deshalb hier
+            # mehrere Versuche mit kurzer Wartezeit. (2) Der Login ist ein
+            # Pseudo-Identifikator (z.B. "Kurzwahl:..."), der nicht (mehr)
+            # exakt so gesucht wird wie gespeichert -- dafuer sorgt die
+            # zusaetzliche satzzeichen-unabhaengige Vergleichsstufe in
+            # _phone_matches().
+            existing = self._find_customer_with_retry(e164_number, default_region)
             if existing is not None:
                 return existing, False
             raise
+
+    def _find_customer_with_retry(
+        self, e164_number: str, default_region: str, attempts: int = 3, delay_seconds: float = 2.0
+    ) -> int | None:
+        for attempt in range(attempts):
+            if attempt:
+                time.sleep(delay_seconds)
+            existing = self.find_customer_by_phone(e164_number, default_region)
+            if existing is not None:
+                return existing
+        return None
 
     def find_open_ticket_for_customer(self, customer_id: int) -> Ticket | None:
         results = (
