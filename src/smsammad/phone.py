@@ -29,6 +29,26 @@ def to_e164(number: str, default_region: str) -> str:
     return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
+_MOBILE_TYPES = {
+    phonenumbers.PhoneNumberType.MOBILE,
+    phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE,
+}
+
+
+def is_mobile_number(number: str, default_region: str) -> bool:
+    """True wenn phonenumbers die Nummer als Mobilfunknummer erkennt (oder
+    als Land, in dem Fest-/Mobilfunk-Nummernraeume nicht eindeutig
+    unterscheidbar sind). Ungueltige/nicht parsebare Werte liefern False
+    statt einer Exception -- wird nur fuer optionale Fallback-Felder mit
+    unkontrolliertem Freitext-Inhalt genutzt, ein Absturz waere hier
+    unangemessen."""
+    try:
+        parsed = _parse(number, default_region)
+    except PhoneNumberError:
+        return False
+    return phonenumbers.number_type(parsed) in _MOBILE_TYPES
+
+
 def to_human_readable(number: str, default_region: str) -> str:
     """z.B. '+4917212344567' (DE) -> '0172 1234 4567': Landesvorwahl durch
     den nationalen Trunk-Praefix '0' ersetzt, danach in Vierergruppen.

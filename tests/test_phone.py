@@ -1,6 +1,6 @@
 import pytest
 
-from smsammad.phone import PhoneNumberError, to_e164, to_teltonika_format
+from smsammad.phone import PhoneNumberError, is_mobile_number, to_e164, to_teltonika_format
 
 
 @pytest.mark.parametrize(
@@ -18,3 +18,15 @@ def test_to_teltonika_format_de():
 def test_invalid_number_raises():
     with pytest.raises(PhoneNumberError):
         to_e164("not a number", "DE")
+
+
+def test_is_mobile_number_true_for_de_mobile():
+    assert is_mobile_number("0151 12345678", "DE") is True
+
+
+def test_is_mobile_number_false_for_de_landline():
+    assert is_mobile_number("030 12345678", "DE") is False
+
+
+def test_is_mobile_number_false_for_invalid_value_instead_of_raising():
+    assert is_mobile_number("not a number", "DE") is False

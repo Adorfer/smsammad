@@ -13,6 +13,7 @@ from smsammad.config import (
     ZammadConfig,
 )
 from smsammad.sms_budget import GroupStat
+from smsammad.teltonika import TeltonikaError
 
 
 class FakeZammad:
@@ -61,10 +62,13 @@ class FakeZammad:
 
 
 class FakeTeltonika:
-    def __init__(self):
+    def __init__(self, fail_with=None):
         self.sent = []
+        self._fail_with = fail_with
 
     def send(self, number, text):
+        if self._fail_with is not None:
+            raise self._fail_with
         self.sent.append((number, text))
 
 
@@ -395,7 +399,7 @@ def test_overflow_sets_tag_and_note_instead_of_sending():
 
     assert teltonika.sent == []
     assert zammad.sent_tags_removed == [(1, "sms-out")]
-    assert zammad.sent_tags_added == [(1, "sms-overflow")]
+    assert zammad.sent_tags_added == [(1, "sms-overflow"), (1, "sms-cannotsend")]
     assert len(zammad.internal_notes) == 1
     assert zammad.internal_notes[0][2] is True
     assert zammad.internal_notes[0][3] == "note"
@@ -446,7 +450,98 @@ def test_overflow_reject_mode_is_default():
     ticket_to_sms.run(zammad, teltonika, _config(max_sms_parts=2), dry_run=False, budget=budget)
 
     assert teltonika.sent == []
-    assert zammad.sent_tags_added == [(1, "sms-overflow")]
+    assert zammad.sent_tags_added == [(1, "sms-overflow"), (1, "sms-cannotsend")]
+
+
+def test_missing_mobile_falls_back_to_phone_field_if_it_is_mobile():
+    """Feld 'mobile' leer, aber 'phone' enthaelt tatsaechlich eine
+    Mobilfunknummer -- soll trotzdem gesendet werden."""
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "", "phone": "0151 12345678"}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert teltonika.sent == [("004915112345678", "Text")]
+    assert zammad.sent_tags_added == [(1, "sms-sent")]
+
+
+def test_missing_mobile_and_phone_field_is_landline_marks_cannot_send():
+    """Feld 'mobile' leer, 'phone' enthaelt eine echte Festnetznummer --
+    kann keine SMS empfangen, darf also NICHT als Sendeziel genutzt werden."""
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "", "phone": "030 12345678"}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert teltonika.sent == []
+    assert zammad.sent_tags_removed == [(1, "sms-out")]
+    assert zammad.sent_tags_added == [(1, "sms-cannotsend")]
+    assert len(zammad.internal_notes) == 1
+    assert "eine erkennbare" in zammad.internal_notes[0][1]
+
+
+def test_missing_mobile_and_no_phone_field_marks_cannot_send():
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": ""}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert teltonika.sent == []
+    assert zammad.sent_tags_added == [(1, "sms-cannotsend")]
+
+
+def test_missing_mobile_dry_run_adds_no_tag_or_note():
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": ""}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=True, budget=budget)
+
+    assert teltonika.sent == []
+    assert zammad.sent_tags_added == []
+    assert zammad.internal_notes == []
+
+
+def test_send_failure_marks_cannot_send_instead_of_crashing():
+    """Regression: ein Router-/Guthaben-Fehler beim tatsaechlichen Versand
+    (z.B. kein SMS-Guthaben mehr) durfte bisher nur still im Log landen,
+    Ticket blieb unveraendert mit Tag 'sms-out' fuer endlose stille
+    Wiederholversuche stehen. Jetzt: Tag + Vermerk fuer den Agenten,
+    kein Crash/RuntimeError."""
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika(fail_with=TeltonikaError("sms_send lieferte HTTP 500: 'no credit'"))
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert zammad.sent_tags_removed == [(1, "sms-out")]
+    assert zammad.sent_tags_added == [(1, "sms-cannotsend")]
+    assert budget.recorded == []
+    assert len(zammad.internal_notes) == 1
+    assert "no credit" in zammad.internal_notes[0][1]
 
 
 def test_budget_exceeded_leaves_tag_for_retry_and_adds_note_once():

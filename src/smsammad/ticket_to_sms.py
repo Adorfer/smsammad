@@ -7,10 +7,10 @@ from .config import Config, TeltonikaConfig
 from .htmltext import html_to_text
 from .logging_setup import redact_content
 from .notify import send_mail
-from .phone import to_teltonika_format
+from .phone import is_mobile_number, to_teltonika_format
 from .sms_budget import SmsBudget
 from .sms_split import split_for_sms
-from .teltonika import TeltonikaClient
+from .teltonika import TeltonikaClient, TeltonikaError
 from .zammad import ZammadClient
 
 logger = logging.getLogger("smsammad")
@@ -18,6 +18,12 @@ logger = logging.getLogger("smsammad")
 TAG_OUT = "sms-out"
 TAG_SENT = "sms-sent"
 TAG_OVERFLOW = "sms-overflow"
+# Genereller Sammel-Tag fuer alle Faelle, in denen ein Versand gar nicht
+# erst versucht/erfolgreich abgeschlossen werden konnte (keine
+# Mobilfunknummer, Text zu lang, Router-/Guthaben-Fehler beim Versand) --
+# zusaetzlich zu den jeweils spezifischeren Tags, damit Agenten mit EINEM
+# Tag/EINER Zammad-Sicht alle "muss ich mich kuemmern"-Tickets sehen.
+TAG_CANNOT_SEND = "sms-cannotsend"
 # Markiert ein Ticket, fuer das schon EINMALIG ein Budget-Wartehinweis
 # hinterlegt wurde -- verhindert, dass bei jedem Cronlauf (solange das
 # Budget weiter erschoepft ist) erneut eine Notiz dazukommt. Wird beim
@@ -77,6 +83,66 @@ def _resolve_destination_number(raw_number: str, teltonika_config: TeltonikaConf
     return to_teltonika_format(raw_number, teltonika_config.default_country_code)
 
 
+def _resolve_send_number(customer: dict, config: Config) -> str | None:
+    """Ermittelt die SMS-Zielnummer eines Kunden: primaer das konfigurierte
+    Mobilfunk-Feld (Default 'mobile'), sonst Fallback auf das normale
+    Telefonnummer-Feld (Default 'phone') -- aber nur, wenn phonenumbers den
+    dort hinterlegten Wert als Mobilfunknummer erkennt (eine Festnetz-
+    nummer kann keine SMS empfangen). None, wenn keines von beidem eine
+    nutzbare Mobilfunknummer liefert.
+    """
+    raw_mobile = customer.get(config.zammad.phone_field)
+    if raw_mobile:
+        return _resolve_destination_number(raw_mobile, config.teltonika)
+
+    raw_fallback = customer.get(config.zammad.phone_field_fallback)
+    default_region = config.teltonika.default_country_code
+    if raw_fallback and is_mobile_number(raw_fallback, default_region):
+        logger.info(
+            "Kunde hat keine Nummer im Feld '%s', nutze Mobilfunknummer aus "
+            "Fallback-Feld '%s'",
+            config.zammad.phone_field,
+            config.zammad.phone_field_fallback,
+        )
+        return _resolve_destination_number(raw_fallback, config.teltonika)
+    return None
+
+
+def _handle_no_number(
+    ticket_id: int,
+    ticket_number: str,
+    zammad: ZammadClient,
+    config: Config,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        logger.info(
+            "[dry-run] Ticket %s: keine Mobilfunknummer gefunden (Felder '%s'/'%s'), "
+            "wuerde Tag '%s' setzen und internen Vermerk hinzufuegen",
+            ticket_number,
+            config.zammad.phone_field,
+            config.zammad.phone_field_fallback,
+            TAG_CANNOT_SEND,
+        )
+        return
+
+    note = (
+        f"SMS-Versand nicht moeglich: Kunde hat weder im Feld "
+        f"'{config.zammad.phone_field}' noch im Feld "
+        f"'{config.zammad.phone_field_fallback}' eine erkennbare "
+        f"Mobilfunknummer hinterlegt. Bitte Nummer im Kundendatensatz "
+        f"ergaenzen/korrigieren, danach Tag '{TAG_OUT}' erneut setzen, um einen "
+        f"neuen Versandversuch auszuloesen."
+    )
+    zammad.remove_tag(ticket_id, TAG_OUT)
+    zammad.add_tag(ticket_id, TAG_CANNOT_SEND)
+    zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
+    logger.warning(
+        "Ticket %s: keine Mobilfunknummer gefunden, Agent wurde per Vermerk informiert",
+        ticket_number,
+    )
+
+
 def _process_one(
     ticket_id: int,
     zammad: ZammadClient,
@@ -89,13 +155,10 @@ def _process_one(
     ticket = zammad.get_ticket(ticket_id)
     ticket_number = ticket["number"]
     customer = zammad.get_user(ticket["customer_id"])
-    raw_number = customer.get(config.zammad.phone_field)
-    if not raw_number:
-        raise ValueError(
-            f"Ticket {ticket_number}: Kunde hat keine Nummer im Feld "
-            f"'{config.zammad.phone_field}'"
-        )
-    number = _resolve_destination_number(raw_number, config.teltonika)
+    number = _resolve_send_number(customer, config)
+    if number is None:
+        _handle_no_number(ticket_id, ticket_number, zammad, config, dry_run)
+        return
 
     articles = zammad.get_ticket_articles(ticket_id)
     # Nur oeffentliche Anruf-Artikel VOM AGENTEN sind SMS-Quelle -- NIE
@@ -235,8 +298,12 @@ def _send(
         )
         return
 
-    for part in parts:
-        teltonika.send(number, part)
+    try:
+        for part in parts:
+            teltonika.send(number, part)
+    except TeltonikaError as exc:
+        _handle_send_failed(ticket_id, ticket_number, exc, zammad)
+        return
     budget.record_sent(len(parts), group=group_name, agent=agent, ticket_number=ticket_number)
 
     now_str = datetime.now().astimezone().strftime("%d.%m.%Y %H:%M:%S")
@@ -252,6 +319,35 @@ def _send(
 
     parts_label = "1 SMS" if len(parts) == 1 else f"{len(parts)} SMS-Teile"
     logger.info("Ticket %s: %s erfolgreich an %s uebergeben", ticket_number, parts_label, number)
+
+
+def _handle_send_failed(
+    ticket_id: int,
+    ticket_number: str,
+    error: Exception,
+    zammad: ZammadClient,
+) -> None:
+    """Der Router hat den Sendeversuch selbst abgelehnt/ist nicht
+    erreichbar -- z.B. kein SMS-Guthaben mehr auf der SIM-Karte, oder ein
+    Netzwerk-/Auth-Problem. Statt endlos still mit Tag `sms-out` erneut zu
+    versuchen (bisheriges Verhalten: nur ein Log-Eintrag, kein Hinweis in
+    Zammad), wird das Ticket getaggt und der Agent per Vermerk informiert.
+    """
+    note = (
+        f"SMS-Versand fehlgeschlagen: {error}\n\n"
+        "Moegliche Ursache: kein SMS-Guthaben mehr auf der SIM-Karte im "
+        "Router, oder ein Netzwerk-/Zugangsproblem zum Router. Bitte "
+        "Guthaben/Router pruefen und danach Tag "
+        f"'{TAG_OUT}' erneut setzen, um einen neuen Versandversuch auszuloesen."
+    )
+    zammad.remove_tag(ticket_id, TAG_OUT)
+    zammad.add_tag(ticket_id, TAG_CANNOT_SEND)
+    zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
+    logger.error(
+        "Ticket %s: SMS-Versand fehlgeschlagen (%s), Agent wurde per Vermerk informiert",
+        ticket_number,
+        error,
+    )
 
 
 def _handle_budget_blocked(
@@ -318,18 +414,20 @@ def _handle_overflow_reject(
     )
     if dry_run:
         logger.info(
-            "[dry-run] Ticket %s: Ueberlauf (%d > %d Teile), wuerde Tag '%s' setzen, "
+            "[dry-run] Ticket %s: Ueberlauf (%d > %d Teile), wuerde Tags '%s'/'%s' setzen, "
             "internen Vermerk hinzufuegen und Prioritaet auf %s setzen",
             ticket_number,
             part_count,
             max_parts,
             TAG_OVERFLOW,
+            TAG_CANNOT_SEND,
             config.zammad.overflow_priority,
         )
         return
 
     zammad.remove_tag(ticket_id, TAG_OUT)
     zammad.add_tag(ticket_id, TAG_OVERFLOW)
+    zammad.add_tag(ticket_id, TAG_CANNOT_SEND)
     zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
     zammad.set_priority(ticket_id, config.zammad.overflow_priority)
     logger.warning("Ticket %s: SMS-Ueberlauf, Agent wurde per Vermerk informiert", ticket_number)

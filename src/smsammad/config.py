@@ -57,6 +57,12 @@ class ZammadConfig:
     new_customer_group: str
     phone_field: str
     overflow_priority: int
+    # Fallback-Feld, falls phone_field (Default "mobile") beim Kunden leer
+    # ist: wird nur verwendet, wenn phonenumbers den dort hinterlegten Wert
+    # als Mobilfunknummer erkennt (eine Festnetznummer kann keine SMS
+    # empfangen). Sinnvoll, wenn Agenten Mobilfunknummern gelegentlich im
+    # normalen Telefonfeld statt im Mobilfunk-Feld erfassen.
+    phone_field_fallback: str = "phone"
     # Fuer ein neues Ticket eines BEKANNTEN Kunden ohne offenes Ticket:
     # False (Default) -- immer die feste Gruppe `group`. True -- Gruppe
     # des zuletzt kontaktierten Tickets dieses Kunden wiederverwenden

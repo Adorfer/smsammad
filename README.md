@@ -590,19 +590,36 @@ gespeichert worden.
 
 ## SMS-Versand-Verhalten
 
+- **Zielnummer**: primär das konfigurierte Mobilfunk-Feld des Kunden
+  (`[zammad] phone_field`, Default `mobile`). Ist das leer, wird
+  ersatzweise das normale Telefonnummer-Feld (`[zammad]
+  phone_field_fallback`, Default `phone`) geprüft -- aber nur verwendet,
+  wenn `phonenumbers` den dortigen Wert tatsächlich als Mobilfunknummer
+  erkennt (eine erkannte Festnetznummer wird nie als SMS-Ziel benutzt).
+  Liefert keines von beiden eine nutzbare Mobilfunknummer, wird **nicht**
+  gesendet, siehe `sms-cannotsend` unten.
 - **Aufteilung** (`sms_split.split_for_sms`): lange Texte werden an
   Wortgrenzen in Teile ≤150 Zeichen (inkl. `"(N/M) "`-Präfix ab dem
   zweiten Teil) zerlegt -- manuell, weil die Teltonika-API das nicht
   automatisch als verkettete Mehrteil-SMS beherrscht, siehe
   [Schade-Punkt oben](#teltonika-api-dokumentation-und-ihre-lücken).
 - **Überlauf** (`[ticket_to_sms] on_overflow`): mehr Teile als
-  `max_sms_parts` → `reject` (nichts senden, Tag `sms-overflow`, Priorität
-  hoch, Agent muss kürzen) oder `truncate` (erste `max_sms_parts` Teile
-  trotzdem senden, Notiz weist auf die Kürzung hin).
+  `max_sms_parts` → `reject` (nichts senden, Tags `sms-overflow` +
+  `sms-cannotsend`, Priorität hoch, Agent muss kürzen) oder `truncate`
+  (erste `max_sms_parts` Teile trotzdem senden, Notiz weist auf die
+  Kürzung hin).
 - **Sende-Budget** (`max_sms_per_hour`/`max_sms_per_24h`, rollierende
   Fenster, keine Kalenderstunden/-tage): bei Erschöpfung bleibt das
   Ticket getaggt und wird automatisch erneut versucht, siehe
   [Budget-Wartehinweis](#budget-wartehinweis-warum-nur-einmalig).
+- **`sms-cannotsend`**: Sammel-Tag für alle Fälle, in denen ein Versand
+  gar nicht erst zustande kommt -- keine (Mobilfunk-)Nummer beim Kunden
+  gefunden, Text-Überlauf im `reject`-Modus, oder der Router hat den
+  Versand selbst abgelehnt (z.B. kein SMS-Guthaben mehr auf der
+  SIM-Karte, Netzwerk-/Zugangsproblem). In allen Fällen wird `sms-out`
+  entfernt (kein stiller Endlos-Retry mehr) und eine interne Notiz mit
+  der Ursache hinterlegt -- Agent behebt die Ursache und setzt `sms-out`
+  danach erneut, um einen neuen Versandversuch auszulösen.
 - **Versand-Quittung**: jede erfolgreich gesendete SMS bekommt eine
   interne Notiz mit Zeichenzahl, Teilanzahl, Zeitstempel und dem exakt
   gesendeten Text (jeder Teil einzeln in `"..."`, damit Anfang/Ende klar

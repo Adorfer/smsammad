@@ -70,6 +70,10 @@ new_customer_group = "SMS-Eingang-Unbekannt"
 group_from_last_ticket = false
 ; Zammad-Nutzerfeld, das die Mobilnummer enthaelt
 phone_field = "mobile"
+; Fallback-Feld, falls phone_field beim Kunden leer ist -- wird nur
+; genutzt, wenn der dortige Wert tatsaechlich als Mobilfunknummer erkannt
+; wird (eine Festnetznummer kann keine SMS empfangen)
+phone_field_fallback = "phone"
 ; Prioritaets-ID, die bei SMS-Ueberlauf (zu viele Teile) gesetzt wird
 overflow_priority = 3
 
