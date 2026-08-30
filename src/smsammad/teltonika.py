@@ -112,9 +112,41 @@ class TeltonikaClient:
             )
         return response
 
+    def _post(self, endpoint: str, timeout: float, **params: str) -> requests.Response:
+        # POST statt GET, weil laengerer `text` als Query-String live HTTP
+        # 413 "Request Entity Too Large" verursacht hat (URL-Laengenlimit
+        # des Router-eigenen Webservers, NICHT der SMS/API selbst -- per
+        # POST-Body verifiziert bis mehrere tausend Zeichen moeglich).
+        # Gleiche Begruendung wie bei _get fuer "ohne from exc".
+        url = f"{self._base_url}/{endpoint}"
+        try:
+            response = requests.post(
+                url,
+                data={**self._auth_params(), **params},
+                timeout=timeout,
+                verify=self._config.verify_tls,
+            )
+        except requests.RequestException as exc:
+            raise TeltonikaError(
+                f"Anfrage an {endpoint} fehlgeschlagen: {type(exc).__name__}"
+            ) from None
+        if response.status_code != 200:
+            raise TeltonikaError(
+                f"{endpoint} lieferte HTTP {response.status_code}: {response.text!r}"
+            )
+        return response
+
     def send(self, number: str, text: str) -> None:
-        """`number` muss bereits im Format 00<Laendercode><Nummer> vorliegen."""
-        self._get("sms_send", number=number, text=text)
+        """`number` muss bereits im Format 00<Laendercode><Nummer> vorliegen.
+
+        Laengere Texte (Multipart-Modus, siehe sms_encoding.py) koennen den
+        Router laut Live-Tests ungewoehnlich lange verarbeiten (beobachtet:
+        bis über 2 Minuten bei sehr langen UCS-2-Texten) -- daher ein
+        deutlich groesseres Timeout als bei den uebrigen, immer schnellen
+        Endpunkten (sms_list/sms_read/sms_delete/sms_total).
+        """
+        send_timeout = max(self._timeout, 60.0)
+        self._post("sms_send", send_timeout, number=number, text=text)
 
     def list_messages(self) -> list[SmsMessage]:
         response = self._get("sms_list")

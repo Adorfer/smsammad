@@ -97,6 +97,14 @@ class TicketToSmsConfig:
     # trotzdem gesendet, Notiz weist auf die Kuerzung hin und nennt den
     # tatsaechlich gesendeten (gekuerzten) Text.
     on_overflow: str = "reject"
+    # "multipart" (Default): der GESAMTE Text wird in EINEM Request an den
+    # Router geschickt (bis zur AWS/Twilio-Standardgrenze fuer Concatenated
+    # SMS, siehe sms_encoding.py) -- der Empfaenger sieht EINE Nachricht,
+    # der Router uebernimmt die echte SMS-Verkettung. "classic": eigenes
+    # manuelles Aufteilen in mehrere eigenstaendige Einzel-SMS mit
+    # "(N/M) "-Praefix (bisheriges Verhalten, siehe sms_split.py) -- jede
+    # SMS einzeln, kein Reassembly durch den Router.
+    send_mode: str = "multipart"
 
 
 @dataclass
@@ -301,6 +309,7 @@ def load_config(path: Path | None = None) -> Config:
                 parser, "ticket_to_sms", "budget_notify_cooldown_minutes", fallback=60
             ),
             on_overflow=on_overflow,
+            send_mode=_get(parser, "ticket_to_sms", "send_mode", fallback="multipart"),
         )
     except (configparser.NoSectionError, configparser.NoOptionError) as exc:
         raise ConfigError(f"Fehlerhafte Config {path}: {exc}") from exc
@@ -309,6 +318,12 @@ def load_config(path: Path | None = None) -> Config:
         raise ConfigError(
             f"Fehlerhafte Config {path}: ticket_to_sms.on_overflow muss 'reject' oder "
             f"'truncate' sein, nicht {ticket_to_sms.on_overflow!r}"
+        )
+
+    if ticket_to_sms.send_mode not in ("multipart", "classic"):
+        raise ConfigError(
+            f"Fehlerhafte Config {path}: ticket_to_sms.send_mode muss 'multipart' oder "
+            f"'classic' sein, nicht {ticket_to_sms.send_mode!r}"
         )
 
     notification = None

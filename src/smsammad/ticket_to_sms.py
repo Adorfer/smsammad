@@ -1,6 +1,7 @@
 """Orchestrierung Zammad-Ticket -> SMS."""
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 
 from .config import Config, TeltonikaConfig
@@ -9,7 +10,14 @@ from .logging_setup import redact_content
 from .notify import send_mail
 from .phone import is_mobile_number, to_teltonika_format
 from .sms_budget import SmsBudget
-from .sms_split import split_for_sms
+from .sms_encoding import (
+    GSM7_MULTIPART_MAX_TOTAL,
+    GSM7_MULTIPART_PART_LIMIT,
+    UCS2_MULTIPART_MAX_TOTAL,
+    UCS2_MULTIPART_PART_LIMIT,
+    encoding_cost,
+)
+from .sms_split import split_for_sms, truncate_to_cost
 from .teltonika import TeltonikaClient, TeltonikaError
 from .zammad import ZammadClient
 
@@ -227,12 +235,54 @@ def _process_one(
     agent = agent_calls[-1].get("from")
     group_name = zammad.get_group_name(ticket["group_id"]) if ticket.get("group_id") else None
 
-    parts = split_for_sms(text, limit=150)
+    send_args = (
+        ticket_id,
+        ticket_number,
+        current_state_id,
+        current_title,
+        number,
+        text,
+        zammad,
+        teltonika,
+        config,
+        dry_run,
+        budget,
+        budget_blocked,
+        group_name,
+        agent,
+    )
+    if config.ticket_to_sms.send_mode == "classic":
+        _process_classic(*send_args)
+    else:
+        _process_multipart(*send_args)
+
+
+def _process_classic(
+    ticket_id: int,
+    ticket_number: str,
+    current_state_id: int | None,
+    current_title: str | None,
+    number: str,
+    text: str,
+    zammad: ZammadClient,
+    teltonika: TeltonikaClient,
+    config: Config,
+    dry_run: bool,
+    budget: SmsBudget,
+    budget_blocked: list[str],
+    group_name: str | None,
+    agent: str | None,
+) -> None:
+    """send_mode = 'classic': eigenes manuelles Aufteilen in mehrere
+    eigenstaendige Einzel-SMS mit '(N/M) '-Praefix, jede ein eigener
+    API-Aufruf (siehe sms_split.py)."""
+    parts = split_for_sms(text)
     max_parts = config.ticket_to_sms.max_sms_parts
 
     if len(parts) > max_parts:
         if config.ticket_to_sms.on_overflow == "truncate":
             total_parts = len(parts)
+            truncated_parts = parts[:max_parts]
             _send(
                 ticket_id,
                 ticket_number,
@@ -240,7 +290,8 @@ def _process_one(
                 current_title,
                 number,
                 text,
-                parts[:max_parts],
+                truncated_parts,
+                len(truncated_parts),
                 zammad,
                 teltonika,
                 config,
@@ -273,6 +324,103 @@ def _process_one(
         number,
         text,
         parts,
+        len(parts),
+        zammad,
+        teltonika,
+        config,
+        dry_run,
+        budget,
+        budget_blocked,
+        group_name,
+        agent,
+    )
+
+
+def _process_multipart(
+    ticket_id: int,
+    ticket_number: str,
+    current_state_id: int | None,
+    current_title: str | None,
+    number: str,
+    text: str,
+    zammad: ZammadClient,
+    teltonika: TeltonikaClient,
+    config: Config,
+    dry_run: bool,
+    budget: SmsBudget,
+    budget_blocked: list[str],
+    group_name: str | None,
+    agent: str | None,
+) -> None:
+    """send_mode = 'multipart' (Default): der GESAMTE Text geht in EINEM
+    API-Aufruf an den Router, der die echte SMS-Verkettung uebernimmt --
+    der Empfaenger sieht EINE Nachricht. Bis zur sicheren AWS/Twilio-
+    Gesamtgrenze fuer Concatenated SMS (sms_encoding.py); `max_sms_parts`
+    wird -- wie im Classic-Modus -- als "wie viele SMS-Sende-Einheiten
+    (Credits) darf diese Nachricht kosten" interpretiert, gedeckelt durch
+    die harte AWS/Twilio-Grenze.
+    """
+    encoding, cost = encoding_cost(text)
+    if encoding == "gsm7":
+        part_limit = GSM7_MULTIPART_PART_LIMIT
+        hard_max = GSM7_MULTIPART_MAX_TOTAL
+    else:
+        part_limit = UCS2_MULTIPART_PART_LIMIT
+        hard_max = UCS2_MULTIPART_MAX_TOTAL
+
+    max_parts = config.ticket_to_sms.max_sms_parts
+    max_total = min(max_parts * part_limit, hard_max)
+
+    if cost > max_total:
+        segments_needed = math.ceil(cost / part_limit)
+        max_segments = math.ceil(max_total / part_limit)
+        if config.ticket_to_sms.on_overflow == "truncate":
+            truncated_text = truncate_to_cost(text, max_total)
+            _, truncated_cost = encoding_cost(truncated_text)
+            credits = max(1, math.ceil(truncated_cost / part_limit))
+            _send(
+                ticket_id,
+                ticket_number,
+                current_state_id,
+                current_title,
+                number,
+                text,
+                [truncated_text],
+                credits,
+                zammad,
+                teltonika,
+                config,
+                dry_run,
+                budget,
+                budget_blocked,
+                group_name,
+                agent,
+                truncated_from=segments_needed,
+            )
+        else:
+            _handle_overflow_reject(
+                ticket_id,
+                ticket_number,
+                current_state_id,
+                current_title,
+                segments_needed,
+                max_segments,
+                zammad,
+                config,
+                dry_run,
+            )
+        return
+
+    credits = max(1, math.ceil(cost / part_limit))
+    _send(
+        ticket_id,
+        ticket_number,
+        current_state_id,
+        current_title,
+        number,
+        text,
+        [text],
+        credits,
         zammad,
         teltonika,
         config,
@@ -287,11 +435,15 @@ def _process_one(
 def _build_send_note(
     text: str,
     parts: list[str],
+    credits: int,
     now_str: str,
     truncated_from: int | None,
     alarm_hint: str | None = None,
 ) -> str:
-    parts_label = "1 SMS" if len(parts) == 1 else f"{len(parts)} SMS-Teile"
+    # `credits` statt len(parts): im Multipart-Modus ist `parts` immer
+    # EIN Element (ein API-Aufruf), `credits` zaehlt aber die echten
+    # SMS-Segmente, die dieser Aufruf beim Provider kostet.
+    parts_label = "1 SMS" if credits == 1 else f"{credits} SMS-Teile"
     header = (
         f"SMS-Versand: {len(text)} Zeichen, {parts_label} am {now_str} an den Router "
         f"uebergeben (keine SMS-Quittung verfuegbar)."
@@ -301,7 +453,7 @@ def _build_send_note(
     if truncated_from is not None:
         warning = (
             f"ACHTUNG: Text war zu lang ({truncated_from} SMS-Teile noetig, erlaubt: "
-            f"{len(parts)}). Nur die ersten {len(parts)} Teile wurden gesendet, der Rest "
+            f"{credits}). Nur die ersten {credits} Teile wurden gesendet, der Rest "
             f"wurde NICHT verschickt."
         )
         note = f"{warning}\n\n{note}"
@@ -327,6 +479,7 @@ def _send(
     number: str,
     text: str,
     parts: list[str],
+    credits: int,
     zammad: ZammadClient,
     teltonika: TeltonikaClient,
     config: Config,
@@ -337,15 +490,22 @@ def _send(
     agent: str | None = None,
     truncated_from: int | None = None,
 ) -> None:
-    if not budget.can_send(len(parts)):
-        _handle_budget_blocked(ticket_id, ticket_number, len(parts), zammad, budget, dry_run, budget_blocked)
+    """`parts` sind die tatsaechlichen API-Aufrufe (Classic: mehrere
+    eigenstaendige Nachrichten; Multipart: IMMER genau eine, der volle
+    Text). `credits` ist die Anzahl SMS-Sende-Einheiten fuers Budget/die
+    Notiz -- im Multipart-Modus groesser als len(parts), da EIN Aufruf
+    mehrere echte Netz-Segmente kostet.
+    """
+    if not budget.can_send(credits):
+        _handle_budget_blocked(ticket_id, ticket_number, credits, zammad, budget, dry_run, budget_blocked)
         return
 
     if dry_run:
         alarm_hint = _low_balance_hint(config, budget)
         logger.info(
-            "[dry-run] wuerde %d SMS-Teil(e) an %s senden (Ticket %s)%s: %r -- danach internen "
-            "Vermerk mit Sendezeit hinzufuegen%s",
+            "[dry-run] wuerde %d SMS-Teil(e) (%d API-Aufruf(e)) an %s senden (Ticket %s)%s: %r "
+            "-- danach internen Vermerk mit Sendezeit hinzufuegen%s",
+            credits,
             len(parts),
             number,
             ticket_number,
@@ -363,11 +523,11 @@ def _send(
             ticket_id, ticket_number, current_state_id, current_title, exc, zammad, config
         )
         return
-    budget.record_sent(len(parts), group=group_name, agent=agent, ticket_number=ticket_number)
+    budget.record_sent(credits, group=group_name, agent=agent, ticket_number=ticket_number)
 
     now_str = datetime.now().astimezone().strftime("%d.%m.%Y %H:%M:%S")
     alarm_hint = _low_balance_hint(config, budget)
-    note = _build_send_note(text, parts, now_str, truncated_from, alarm_hint)
+    note = _build_send_note(text, parts, credits, now_str, truncated_from, alarm_hint)
     zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
     zammad.remove_tag(ticket_id, TAG_OUT)
     zammad.add_tag(ticket_id, TAG_SENT)
@@ -376,7 +536,7 @@ def _send(
     if TAG_BUDGET_WAIT in zammad.get_tags(ticket_id):
         zammad.remove_tag(ticket_id, TAG_BUDGET_WAIT)
 
-    parts_label = "1 SMS" if len(parts) == 1 else f"{len(parts)} SMS-Teile"
+    parts_label = "1 SMS" if credits == 1 else f"{credits} SMS-Teile"
     logger.info("Ticket %s: %s erfolgreich an %s uebergeben", ticket_number, parts_label, number)
 
 

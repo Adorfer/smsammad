@@ -178,29 +178,53 @@ Live gegen ein echtes RUT240 verifiziert (siehe `teltonika.py`):
 - `sms_read`/`sms_total` sind nur gegen die Doku umgesetzt, nicht am
   echten Gerät verifiziert (werden von den aktuellen Abläufen nicht
   gebraucht) — falls sie mal gebraucht werden, zuerst live gegenprüfen.
-- **Schade**: `sms_send` bietet -- soweit in diesem Projekt genutzt/
-  erkundet -- keine Möglichkeit, einen längeren Text automatisch als
-  korrekt verkettete Mehrteil-SMS (GSM-Concatenated-SMS/UDH) zu
-  versenden; jeder Teil geht als eigenständige einzelne SMS raus.
-  Deshalb übernimmt `sms_split.py` das Aufteilen selbst und setzt
-  lesbare `"(1/3)"`-Präfixe vor jeden Teil, statt dass das Empfänger-
-  Handy die Teile automatisch zu einer Nachricht zusammenfügt (siehe
-  [SMS-Versand-Verhalten](#sms-versand-verhalten)). Ob eine vom Kunden
-  gesendete, im Mobilfunknetz korrekt verkettete Mehrteil-SMS beim
-  Empfang durch Router/Modem automatisch wieder zusammengesetzt würde,
-  ist in diesem Projekt **nicht verifiziert** (bislang kein solcher Fall
-  real beobachtet) -- wünschenswert wäre es so oder so: sowohl der eigene
-  Splitting-Code als auch die für den Kunden unübersichtliche Ankunft
-  mehrerer einzelner SMS-Nachrichten hintereinander wären damit
-  überflüssig.
+- **Korrektur eines früheren "Schade"-Eintrags**: lange Zeit stand hier,
+  `sms_send` könne keine echte verkettete Mehrteil-SMS (GSM-Concatenated-
+  SMS/UDH), jeder Teil müsse als eigenständige Einzel-SMS raus. Das war
+  **falsch** bzw. eine Verwechslung mit einem anderen Problem. Live
+  verifiziert: `sms_send` sendet auch sehr lange Texte (mehrere tausend
+  Zeichen) in **einem** Aufruf als eine einzige, vom Router korrekt
+  verkettete SMS, die beim Empfänger als **eine** Nachricht ankommt --
+  vorausgesetzt, der Request geht per **POST** raus (Formular-Body), nicht
+  per GET (Query-String): ein sehr langer GET-Query-String hat live HTTP
+  `413 Request Entity Too Large` vom Router-eigenen Webserver ausgelöst
+  (ein URL-Längenlimit, nicht ein Limit der SMS-API selbst). `send_mode =
+  "multipart"` (Default, siehe [SMS-Versand-Verhalten](#sms-versand-verhalten))
+  nutzt das jetzt aus.
+- **Aber**: sehr lange Nachrichten (deutlich über den unten genannten
+  sicheren AWS/Twilio-Grenzwerten) waren in Live-Tests **unzuverlässig**
+  -- zwei verschiedene Fehlerbilder beobachtet, mit dem **gleichen**
+  Empfänger/Encoding, nur unterschiedlicher Textlänge: (1) stille
+  Kürzung ohne jeden Fehler (HTTP 200 durchgehend) und (2) ein
+  über 2 Minuten hängender Request, währenddessen der Router auch auf
+  andere Endpunkte kurzzeitig nur noch mit dem Text `"TIMEOUT"` antwortete,
+  UND die Nachricht kam am Ende **doppelt** beim Empfänger an. Die Daten
+  ergeben keine saubere Formel (gleiches UCS-2-Encoding: einmal 0% Verlust,
+  einmal 25% Verlust) -- Vermutung: die tatsächliche Bremse ist eine
+  **maximale Verarbeitungszeit** in der Encoding-/Verkettungs-Schleife der
+  Router-Firmware (CPU-gebunden, nicht text-laengen-gebunden), nicht ein
+  fester Zeichen-/Byte-Grenzwert. Getestet wurde gegen ein **RUT240**
+  (400 MHz CPU); der Nachfolger **RUT241** hat die doppelte RAM-Menge und
+  eine mit 580 MHz deutlich schnellere CPU -- auf diesem Modell wäre ein
+  eigener Test nötig, die hier gemessenen Grenzen sind nicht ohne Weiteres
+  übertragbar. Deshalb hält sich SMSammad bewusst an die von AWS/Twilio
+  dokumentierten, in der Telekom-Branche etablierten sicheren Grenzwerte
+  (1530 GSM-7-Zeichen/630 UCS-2-Zeichen) statt an das, was der Router im
+  Test gerade noch akzeptiert hat -- ein "Yolo-Modus" mit den empirisch
+  ermittelten (aber unzuverlässigen) Werten wurde bewusst **nicht**
+  eingebaut.
 
 ### Credential-Sicherheit beim Teltonika-Zugriff
 
-Die Teltonika-API verlangt Benutzername/Passwort **als Query-Parameter in
-der URL** (von der API so vorgegeben, nicht verhandelbar). Das ist ein
-eingebautes Leak-Risiko: jede Exception aus `requests`/`urllib3`, die
-ungefiltert geloggt oder per Traceback/Fehlermail verschickt wird, enthält
-sonst die volle URL inklusive Zugangsdaten. Deshalb in `teltonika.py`:
+Die Teltonika-API verlangt Benutzername/Passwort **als Parameter** (von
+der API so vorgegeben, nicht verhandelbar) -- bei den meisten Endpunkten
+(`sms_list`/`sms_read`/`sms_delete`/`sms_total`) weiterhin als
+Query-Parameter in der URL (GET), bei `sms_send` inzwischen als
+Formular-Body (POST, siehe oben) -- dort also nicht mehr in der URL
+sichtbar. Für die verbleibenden GET-Endpunkte bleibt das ein eingebautes
+Leak-Risiko: jede Exception aus `requests`/`urllib3`, die ungefiltert
+geloggt oder per Traceback/Fehlermail verschickt wird, enthält sonst die
+volle URL inklusive Zugangsdaten. Deshalb in `teltonika.py`:
 
 - `raise TeltonikaError(...) from None` beim Abfangen von
   `requests.RequestException` — bewusst **ohne** Exception-Chaining, damit
@@ -598,16 +622,41 @@ gespeichert worden.
   erkennt (eine erkannte Festnetznummer wird nie als SMS-Ziel benutzt).
   Liefert keines von beiden eine nutzbare Mobilfunknummer, wird **nicht**
   gesendet, siehe `sms-cannotsend` unten.
-- **Aufteilung** (`sms_split.split_for_sms`): lange Texte werden an
-  Wortgrenzen in Teile ≤150 Zeichen (inkl. `"(N/M) "`-Präfix ab dem
-  zweiten Teil) zerlegt -- manuell, weil die Teltonika-API das nicht
-  automatisch als verkettete Mehrteil-SMS beherrscht, siehe
-  [Schade-Punkt oben](#teltonika-api-dokumentation-und-ihre-lücken).
-- **Überlauf** (`[ticket_to_sms] on_overflow`): mehr Teile als
-  `max_sms_parts` → `reject` (nichts senden, Tags `sms-overflow` +
-  `sms-cannotsend`, Priorität hoch, Agent muss kürzen) oder `truncate`
-  (erste `max_sms_parts` Teile trotzdem senden, Notiz weist auf die
-  Kürzung hin).
+- **Sende-Modus** (`[ticket_to_sms] send_mode`): steuert, WIE ein langer
+  Text den Empfänger erreicht.
+  - `"multipart"` (**Default**): der komplette Text geht in **einem**
+    API-Aufruf raus (POST, siehe
+    [oben](#teltonika-api-dokumentation-und-ihre-lücken)) -- der Router
+    übernimmt die echte SMS-Verkettung, der Empfänger sieht **eine**
+    Nachricht ohne Präfix.
+  - `"classic"`: eigenes Aufteilen in mehrere eigenständige Einzel-SMS mit
+    `"(N/M) "`-Präfix (`sms_split.split_for_sms`), jede ein eigener
+    API-Aufruf -- historisches Verhalten, kein Reassembly durch den
+    Router.
+  - Beide Modi sind **kodierungsbewusst** (`sms_encoding.py`, Tabelle
+    gegen die offizielle ETSI/GSM-03.38-Zuordnung verifiziert): reiner
+    GSM-7-Text (Standardbuchstaben, Ziffern, gängige Satzzeichen) erlaubt
+    mehr Zeichen pro SMS/Segment als Text mit auch nur einem einzelnen
+    Sonderzeichen (Emoji, viele Akzentbuchstaben, kyrillische/griechische
+    Zeichen außerhalb des GSM-7-Satzes) -- sobald **ein** solches Zeichen
+    vorkommt, wird die **gesamte** Nachricht als UCS-2 kodiert (Standard-
+    verhalten jedes SMS-Encoders). GSM-7-Erweiterungszeichen (`€ ^ { } [
+    ] ~ | \` sowie Form Feed) kosten dabei **zwei** Septets statt eines --
+    ein häufiger Zählfehler, wenn man naiv "1 Zeichen = 1 Kosteneinheit"
+    annimmt. Grenzwerte (AWS/Twilio-Standard, siehe unten):
+
+    | | GSM-7 | UCS-2 |
+    |---|---|---|
+    | Einzel-SMS | 160 Septets | 70 Codeeinheiten |
+    | pro Segment (Mehrteil) | 153 Septets | 67 Codeeinheiten |
+    | Gesamt-Obergrenze | 1530 Septets (10 Segmente) | 630 Codeeinheiten |
+
+- **Überlauf** (`[ticket_to_sms] on_overflow`): mehr "Sende-Einheiten"
+  (Classic: separate SMS; Multipart: echte Netz-Segmente) als
+  `max_sms_parts` erlaubt (gedeckelt durch die harte Gesamt-Obergrenze
+  oben) → `reject` (nichts senden, Tags `sms-overflow` + `sms-cannotsend`,
+  Priorität hoch, Agent muss kürzen) oder `truncate` (Text bis zur Grenze
+  wortweise gekürzt trotzdem gesendet, Notiz weist auf die Kürzung hin).
 - **Sende-Budget** (`max_sms_per_hour`/`max_sms_per_24h`, rollierende
   Fenster, keine Kalenderstunden/-tage): bei Erschöpfung bleibt das
   Ticket getaggt und wird automatisch erneut versucht, siehe

@@ -1,3 +1,5 @@
+import urllib.parse
+
 import pytest
 import responses
 
@@ -40,10 +42,14 @@ def client(config):
 
 @responses.activate
 def test_send_calls_sms_send(client):
-    responses.add(responses.GET, "http://192.168.1.1/cgi-bin/sms_send", body="OK")
+    # POST statt GET: ein langer `text` als Query-String hat live HTTP 413
+    # "Request Entity Too Large" verursacht (URL-Laengenlimit des Router-
+    # eigenen Webservers), POST mit Body war live erfolgreich.
+    responses.add(responses.POST, "http://192.168.1.1/cgi-bin/sms_send", body="OK")
     client.send("0049151112345678", "hallo")
-    assert responses.calls[0].request.params["number"] == "0049151112345678"
-    assert responses.calls[0].request.params["text"] == "hallo"
+    sent_params = urllib.parse.parse_qs(responses.calls[0].request.body)
+    assert sent_params["number"] == ["0049151112345678"]
+    assert sent_params["text"] == ["hallo"]
 
 
 @responses.activate

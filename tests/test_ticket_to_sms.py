@@ -143,7 +143,13 @@ def _customer_call(body):
     return {"body": body, "type": "phone", "internal": False, "sender": "Customer"}
 
 
-def _config(max_sms_parts=3, unresolved_sender_prefix="", on_overflow="reject", balance=None):
+def _config(
+    max_sms_parts=3,
+    unresolved_sender_prefix="",
+    on_overflow="reject",
+    balance=None,
+    send_mode="classic",
+):
     return Config(
         teltonika=TeltonikaConfig(
             host="h",
@@ -163,6 +169,7 @@ def _config(max_sms_parts=3, unresolved_sender_prefix="", on_overflow="reject", 
             stats_db_file="/nonexistent/should-not-be-used.json",
             budget_notify_cooldown_minutes=60,
             on_overflow=on_overflow,
+            send_mode=send_mode,
         ),
         notification=None,
         balance=balance,
@@ -463,6 +470,153 @@ def test_overflow_reject_mode_is_default():
 
     assert teltonika.sent == []
     assert zammad.sent_tags_added == [(1, "sms-overflow"), (1, "sms-cannotsend")]
+
+
+def test_multipart_mode_sends_full_text_in_one_call_no_prefix():
+    """send_mode='multipart' (Produktions-Default): der GESAMTE Text geht
+    in EINEM API-Aufruf raus, kein '(N/M) '-Praefix, kein Aufteilen in
+    separate Nachrichten -- der Router uebernimmt die echte
+    SMS-Verkettung."""
+    text = " ".join(["wort"] * 60)  # laenger als eine Einzel-SMS (160 Septets)
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call(text)]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(
+        zammad, teltonika, _config(max_sms_parts=10, send_mode="multipart"), dry_run=False, budget=budget
+    )
+
+    assert len(teltonika.sent) == 1
+    assert teltonika.sent[0] == ("004915112345678", text)
+    assert zammad.sent_tags_added == [(1, "sms-sent")]
+
+
+def test_multipart_mode_budget_credits_reflect_real_segment_count():
+    # 60 "wort" (5 Zeichen inkl. Leerzeichen je Wort - 1) = 299 Zeichen,
+    # reines GSM-7 -> 299 Septets / 153 Septets pro Segment = 2 Segmente.
+    text = " ".join(["wort"] * 60)
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call(text)]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(
+        zammad, teltonika, _config(max_sms_parts=10, send_mode="multipart"), dry_run=False, budget=budget
+    )
+
+    assert budget.record_sent_calls == [(2, None, None, "1001")]
+
+
+def test_multipart_mode_short_text_costs_one_credit():
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call("Kurzer Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(
+        zammad, teltonika, _config(send_mode="multipart"), dry_run=False, budget=budget
+    )
+
+    assert budget.record_sent_calls == [(1, None, None, "1001")]
+
+
+def test_multipart_mode_overflow_reject_does_not_send():
+    # max_sms_parts=1 -> max_total = 1*153 = 153 Septets, Text braucht mehr.
+    long_text = " ".join(["wort"] * 60)  # 299 Septets
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call(long_text)]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(
+        zammad,
+        teltonika,
+        _config(max_sms_parts=1, send_mode="multipart", on_overflow="reject"),
+        dry_run=False,
+        budget=budget,
+    )
+
+    assert teltonika.sent == []
+    assert zammad.sent_tags_added == [(1, "sms-overflow"), (1, "sms-cannotsend")]
+
+
+def test_multipart_mode_overflow_truncate_sends_one_shortened_call():
+    long_text = " ".join(["wort"] * 60)  # 299 Septets
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call(long_text)]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(
+        zammad,
+        teltonika,
+        _config(max_sms_parts=1, send_mode="multipart", on_overflow="truncate"),
+        dry_run=False,
+        budget=budget,
+    )
+
+    assert len(teltonika.sent) == 1
+    sent_text = teltonika.sent[0][1]
+    assert len(sent_text) < len(long_text)
+    assert not sent_text.startswith("(")
+    assert zammad.sent_tags_added == [(1, "sms-sent")]
+
+
+def test_multipart_mode_ucs2_text_has_lower_overflow_threshold():
+    # Bei gleicher max_sms_parts-Anzahl ist die UCS-2-Gesamtgrenze
+    # (67 Codeeinheiten/Segment) niedriger als die GSM-7-Grenze
+    # (153 Septets/Segment) -- derselbe Text mit einem einzigen
+    # nicht-GSM-7-Zeichen kann daher ueberlaufen, waehrend die reine
+    # GSM-7-Variante noch passt.
+    gsm7_text = " ".join(["wort"] * 30)  # 149 Septets, passt in 1 Segment (153)
+    ucs2_text = gsm7_text + " ê"  # erzwingt UCS-2 fuer den GESAMTEN Text
+
+    zammad_gsm7 = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call(gsm7_text)]},
+    )
+    teltonika_gsm7 = FakeTeltonika()
+    ticket_to_sms.run(
+        zammad_gsm7,
+        teltonika_gsm7,
+        _config(max_sms_parts=1, send_mode="multipart"),
+        dry_run=False,
+        budget=FakeBudget(),
+    )
+    assert len(teltonika_gsm7.sent) == 1
+
+    zammad_ucs2 = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call(ucs2_text)]},
+    )
+    teltonika_ucs2 = FakeTeltonika()
+    ticket_to_sms.run(
+        zammad_ucs2,
+        teltonika_ucs2,
+        _config(max_sms_parts=1, send_mode="multipart", on_overflow="reject"),
+        dry_run=False,
+        budget=FakeBudget(),
+    )
+    assert teltonika_ucs2.sent == []
+    assert zammad_ucs2.sent_tags_added == [(1, "sms-overflow"), (1, "sms-cannotsend")]
 
 
 def test_missing_mobile_falls_back_to_phone_field_if_it_is_mobile():

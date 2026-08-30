@@ -84,14 +84,27 @@ overflow_priority = 3
 open_state_id = 2
 
 [ticket_to_sms]
-; maximale Anzahl SMS-Teile
+; "multipart" (Default): der GESAMTE Text geht in EINEM Request an den
+;             Router, der die echte SMS-Verkettung uebernimmt -- Empfaenger
+;             sieht EINE Nachricht. Bis zur sicheren AWS/Twilio-Grenze fuer
+;             Concatenated SMS (153 GSM-7-Septets/67 UCS-2-Codeeinheiten
+;             pro Segment, siehe README).
+; "classic"   -- eigenes Aufteilen in mehrere eigenstaendige Einzel-SMS mit
+;             "(N/M) "-Praefix (bisheriges Verhalten), jede Nachricht ein
+;             eigener API-Aufruf, kein Reassembly durch den Router.
+send_mode = "multipart"
+; Anzahl SMS-Sende-Einheiten ("Credits"), die eine Nachricht maximal
+; kosten darf, bevor on_overflow greift. Im "classic"-Modus: Anzahl
+; separater Einzel-SMS. Im "multipart"-Modus: Anzahl echter Netz-Segmente
+; (max_sms_parts * 153/67, gedeckelt durch die harte AWS/Twilio-Grenze
+; 1530 GSM-7/630 UCS-2, siehe README).
 max_sms_parts = 3
 ; Verhalten bei Ueberlauf (> max_sms_parts):
 ; "reject"   -- gar nicht senden, Fehler-Notiz, Tag sms-overflow, Prioritaet
 ;               hoch (overflow_priority) -- Agent muss den Text kuerzen.
-; "truncate" -- die ersten max_sms_parts Teile trotzdem senden, Notiz weist
-;               auf die Kuerzung hin und zeigt den tatsaechlich gesendeten
-;               (gekuerzten) Text.
+; "truncate" -- die ersten max_sms_parts Teile/Segmente trotzdem senden,
+;               Notiz weist auf die Kuerzung hin und zeigt den tatsaechlich
+;               gesendeten (gekuerzten) Text.
 on_overflow = "reject"
 ; SMS-Sende-Budget (rollierende Fenster), gilt pro tatsaechlich versendeter
 ; SMS (Mehrteiler zaehlen mehrfach). Bei Ueberschreitung wird das jeweilige

@@ -197,6 +197,38 @@ def test_on_overflow_rejects_invalid_value(tmp_path):
         load_config(config_path)
 
 
+def test_send_mode_defaults_to_multipart(tmp_path):
+    content = CONFIG_TEMPLATE.format(
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
+    )
+    config_path = _write_config(tmp_path, content)
+
+    config = load_config(config_path)
+
+    assert config.ticket_to_sms.send_mode == "multipart"
+
+
+def test_send_mode_accepts_classic(tmp_path):
+    content = CONFIG_TEMPLATE.format(
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
+    ) + 'send_mode = "classic"\n'
+    config_path = _write_config(tmp_path, content)
+
+    config = load_config(config_path)
+
+    assert config.ticket_to_sms.send_mode == "classic"
+
+
+def test_send_mode_rejects_invalid_value(tmp_path):
+    content = CONFIG_TEMPLATE.format(
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
+    ) + 'send_mode = "yolo"\n'
+    config_path = _write_config(tmp_path, content)
+
+    with pytest.raises(ConfigError):
+        load_config(config_path)
+
+
 def test_stats_db_file_has_sensible_default(tmp_path):
     content = CONFIG_TEMPLATE.format(
         username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
