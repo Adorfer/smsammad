@@ -80,11 +80,10 @@ class TeltonikaClient:
         self._timeout = timeout
         self._base_url = f"{config.scheme}://{config.host}/cgi-bin"
         if config.scheme == "https" and not config.verify_tls:
-            logger.warning(
-                "TLS-Zertifikatspruefung fuer %s deaktiviert (verify_tls=false) -- "
-                "ueblich bei selbstsigniertem Teltonika-Zertifikat im LAN",
-                config.host,
-            )
+            # Kein WARNING-Log dafuer -- wer verify_tls=false in der
+            # config.ini setzt, hat das bewusst getan (uebliche
+            # Notwendigkeit bei selbstsigniertem Teltonika-Zertifikat im
+            # LAN), das muss nicht bei jedem Lauf ins Log.
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def _auth_params(self) -> dict[str, str]:

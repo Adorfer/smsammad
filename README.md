@@ -169,9 +169,12 @@ Live gegen ein echtes RUT240 verifiziert (siehe `teltonika.py`):
   falsche Router-Konfiguration nie aktiv auffallen, sondern sich nur als
   dauerhaft leerer Posteingang zeigen.
 - Das Gerät ist im Praxisbetrieb mit getrennten Netzsegmenten im Homelab
-  **nur per HTTPS mit selbstsigniertem Zertifikat** erreichbar (Port 80 
-  typischerweise zu). `verify_tls=false` ist daher der praktikable Default, 
-  mit einer WARNING-Logzeile beim Start, damit das nicht versehentlich unbemerkt bleibt.
+  **nur per HTTPS mit selbstsigniertem Zertifikat** erreichbar (Port 80
+  typischerweise zu). `verify_tls=false` ist daher der praktikable
+  Default -- ohne eigene Logzeile dafür, denn wer das in der `config.ini`
+  bewusst so gesetzt hat, weiß das bereits (und ein echtes,
+  z.B. per DNS-Challenge ausgestelltes Let's-Encrypt-Zertifikat auf einem
+  Teltonika-Router ist ein extrem unwahrscheinliches Szenario).
 - `sms_read`/`sms_total` sind nur gegen die Doku umgesetzt, nicht am
   echten Gerät verifiziert (werden von den aktuellen Abläufen nicht
   gebraucht) — falls sie mal gebraucht werden, zuerst live gegenprüfen.
