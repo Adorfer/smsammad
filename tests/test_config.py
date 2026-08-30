@@ -14,14 +14,14 @@ def _write_config(tmp_path: Path, content: str) -> Path:
 
 CONFIG_TEMPLATE = """
 [teltonika]
-host = 192.168.1.1
+host = "192.168.1.1"
 username = {username}
 password = {password}
-default_country_code = DE
+default_country_code = "DE"
 
 [zammad]
-url = https://zammad.example.local
-token = tok
+url = "https://zammad.example.local"
+token = "tok"
 group = {group}
 new_customer_group = {new_customer_group}
 
@@ -48,44 +48,92 @@ def test_quoted_values_with_spaces_get_unquoted(tmp_path):
     assert config.zammad.new_customer_group == "Neue Kunden SMS"
 
 
-def test_unquoted_values_still_work_as_before(tmp_path):
+def test_unquoted_string_value_is_rejected(tmp_path):
+    """Strings MUESSEN gequotet sein -- kein stiller Fallback mehr, siehe
+    config._unquote. Sonst waere z.B. bei einem Wert mit Inline-Kommentar
+    (key = wert # kommentar) nicht eindeutig entscheidbar, wo der Wert
+    aufhoert und der Kommentar anfaengt."""
     config_path = _write_config(
         tmp_path,
         CONFIG_TEMPLATE.format(
-            username="user1",
-            password="user_pass",
-            group="Users",
-            new_customer_group="Triage",
+            username="user1", password='"p"', group='"Users"', new_customer_group='"Triage"'
+        ),
+    )
+
+    with pytest.raises(ConfigError):
+        load_config(config_path)
+
+
+def test_mismatched_quotes_are_rejected(tmp_path):
+    config_path = _write_config(
+        tmp_path,
+        CONFIG_TEMPLATE.format(
+            username="\"user1'", password='"p"', group='"Users"', new_customer_group='"Triage"'
+        ),
+    )
+
+    with pytest.raises(ConfigError):
+        load_config(config_path)
+
+
+def test_value_with_trailing_inline_comment_is_parsed_correctly(tmp_path):
+    """Regression: 'key = \"value\" # comment' liess frueher den gesamten
+    Rest inkl. Anfuehrungszeichen und Kommentartext im Wert stehen
+    (configparser kennt Inline-Kommentare nicht automatisch) -- live als
+    korrupter Zammad-Token beobachtet (401 'Cant find User for Token')."""
+    config_path = _write_config(
+        tmp_path,
+        CONFIG_TEMPLATE.format(
+            username='"user1"  # das ist der Benutzername',
+            password='"p"',
+            group='"Users"',
+            new_customer_group='"Triage"',
         ),
     )
 
     config = load_config(config_path)
 
     assert config.teltonika.username == "user1"
-    assert config.teltonika.password == "user_pass"
-    assert config.zammad.group == "Users"
-    assert config.zammad.new_customer_group == "Triage"
 
 
-def test_mismatched_quotes_are_left_untouched(tmp_path):
+def test_hash_inside_quotes_is_not_treated_as_comment(tmp_path):
+    """Ein '#' INNERHALB der Anfuehrungszeichen (z.B. Teil eines echten
+    Passworts) darf nicht als Kommentaranfang missverstanden werden --
+    auch nicht, wenn ihm ein Leerzeichen vorausgeht."""
     config_path = _write_config(
         tmp_path,
         CONFIG_TEMPLATE.format(
-            username="\"user1'",
-            password="user_pass",
-            group="Users",
-            new_customer_group="Triage",
+            username='"user1"',
+            password='"pass # word"',
+            group='"Users"',
+            new_customer_group='"Triage"',
         ),
     )
 
     config = load_config(config_path)
 
-    assert config.teltonika.username == "\"user1'"
+    assert config.teltonika.password == "pass # word"
+
+
+def test_hash_without_surrounding_space_inside_quotes_stays_intact(tmp_path):
+    config_path = _write_config(
+        tmp_path,
+        CONFIG_TEMPLATE.format(
+            username='"user1"',
+            password='"4784Umzwi#3+"',
+            group='"Users"',
+            new_customer_group='"Triage"',
+        ),
+    )
+
+    config = load_config(config_path)
+
+    assert config.teltonika.password == "4784Umzwi#3+"
 
 
 def test_numeric_and_boolean_fields_unaffected_by_unquoting(tmp_path):
     content = CONFIG_TEMPLATE.format(
-        username="u", password="p", group="Users", new_customer_group="Triage"
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
     ) + "max_sms_parts = 3\n"
     config_path = _write_config(tmp_path, content)
 
@@ -94,9 +142,31 @@ def test_numeric_and_boolean_fields_unaffected_by_unquoting(tmp_path):
     assert config.ticket_to_sms.max_sms_parts == 3
 
 
+def test_numeric_field_with_trailing_inline_comment(tmp_path):
+    content = CONFIG_TEMPLATE.format(
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
+    ) + "max_sms_parts = 3  # maximal drei SMS-Teile\n"
+    config_path = _write_config(tmp_path, content)
+
+    config = load_config(config_path)
+
+    assert config.ticket_to_sms.max_sms_parts == 3
+
+
+def test_boolean_field_with_trailing_inline_comment(tmp_path):
+    content = CONFIG_TEMPLATE.format(
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
+    ) + "verify_tls = false  # selbstsigniertes Zertifikat\n"
+    config_path = _write_config(tmp_path, content)
+
+    config = load_config(config_path)
+
+    assert config.teltonika.verify_tls is False
+
+
 def test_on_overflow_defaults_to_reject(tmp_path):
     content = CONFIG_TEMPLATE.format(
-        username="u", password="p", group="Users", new_customer_group="Triage"
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
     )
     config_path = _write_config(tmp_path, content)
 
@@ -107,7 +177,7 @@ def test_on_overflow_defaults_to_reject(tmp_path):
 
 def test_on_overflow_accepts_truncate(tmp_path):
     content = CONFIG_TEMPLATE.format(
-        username="u", password="p", group="Users", new_customer_group="Triage"
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
     ) + 'on_overflow = "truncate"\n'
     config_path = _write_config(tmp_path, content)
 
@@ -118,7 +188,7 @@ def test_on_overflow_accepts_truncate(tmp_path):
 
 def test_on_overflow_rejects_invalid_value(tmp_path):
     content = CONFIG_TEMPLATE.format(
-        username="u", password="p", group="Users", new_customer_group="Triage"
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
     ) + 'on_overflow = "delete"\n'
     config_path = _write_config(tmp_path, content)
 
@@ -128,7 +198,7 @@ def test_on_overflow_rejects_invalid_value(tmp_path):
 
 def test_stats_db_file_has_sensible_default(tmp_path):
     content = CONFIG_TEMPLATE.format(
-        username="u", password="p", group="Users", new_customer_group="Triage"
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
     )
     config_path = _write_config(tmp_path, content)
 
@@ -139,7 +209,7 @@ def test_stats_db_file_has_sensible_default(tmp_path):
 
 def test_stats_db_file_accepts_explicit_path(tmp_path):
     content = CONFIG_TEMPLATE.format(
-        username="u", password="p", group="Users", new_customer_group="Triage"
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
     ) + 'stats_db_file = "~/custom/stats.db"\n'
     config_path = _write_config(tmp_path, content)
 
@@ -151,7 +221,7 @@ def test_stats_db_file_accepts_explicit_path(tmp_path):
 
 def test_balance_config_is_none_when_section_missing(tmp_path):
     content = CONFIG_TEMPLATE.format(
-        username="u", password="p", group="Users", new_customer_group="Triage"
+        username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
     )
     config_path = _write_config(tmp_path, content)
 
@@ -163,7 +233,7 @@ def test_balance_config_is_none_when_section_missing(tmp_path):
 def test_balance_config_defaults_to_ussd_method(tmp_path):
     content = (
         CONFIG_TEMPLATE.format(
-            username="u", password="p", group="Users", new_customer_group="Triage"
+            username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
         )
         + '\n[balance]\n'
         'api_username = "smsammad"\n'
@@ -192,7 +262,7 @@ def test_balance_config_defaults_to_ussd_method(tmp_path):
 def test_balance_config_sms_method_loaded_when_section_present(tmp_path):
     content = (
         CONFIG_TEMPLATE.format(
-            username="u", password="p", group="Users", new_customer_group="Triage"
+            username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
         )
         + '\n[balance]\n'
         'method = "sms"\n'
@@ -220,7 +290,7 @@ def test_balance_config_sms_method_loaded_when_section_present(tmp_path):
 def test_balance_config_rejects_invalid_method(tmp_path):
     content = (
         CONFIG_TEMPLATE.format(
-            username="u", password="p", group="Users", new_customer_group="Triage"
+            username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
         )
         + '\n[balance]\n'
         'method = "carrier-pigeon"\n'
@@ -236,7 +306,7 @@ def test_balance_config_rejects_invalid_method(tmp_path):
 def test_balance_config_ussd_requires_api_credentials(tmp_path):
     content = (
         CONFIG_TEMPLATE.format(
-            username="u", password="p", group="Users", new_customer_group="Triage"
+            username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
         )
         + '\n[balance]\n'
         "warn_threshold_eur = 5.00\n"
@@ -251,7 +321,7 @@ def test_balance_config_ussd_requires_api_credentials(tmp_path):
 def test_balance_config_sms_requires_query_number_and_reply_sender(tmp_path):
     content = (
         CONFIG_TEMPLATE.format(
-            username="u", password="p", group="Users", new_customer_group="Triage"
+            username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
         )
         + '\n[balance]\n'
         'method = "sms"\n'
@@ -267,7 +337,7 @@ def test_balance_config_sms_requires_query_number_and_reply_sender(tmp_path):
 def test_balance_config_accepts_custom_regex_overrides(tmp_path):
     content = (
         CONFIG_TEMPLATE.format(
-            username="u", password="p", group="Users", new_customer_group="Triage"
+            username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
         )
         + '\n[balance]\n'
         'api_username = "smsammad"\n'
@@ -288,7 +358,7 @@ def test_balance_config_accepts_custom_regex_overrides(tmp_path):
 def test_balance_config_rejects_invalid_regex(tmp_path):
     content = (
         CONFIG_TEMPLATE.format(
-            username="u", password="p", group="Users", new_customer_group="Triage"
+            username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
         )
         + '\n[balance]\n'
         'api_username = "smsammad"\n'
@@ -306,7 +376,7 @@ def test_balance_config_rejects_invalid_regex(tmp_path):
 def test_balance_config_rejects_regex_without_capture_group(tmp_path):
     content = (
         CONFIG_TEMPLATE.format(
-            username="u", password="p", group="Users", new_customer_group="Triage"
+            username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
         )
         + '\n[balance]\n'
         'api_username = "smsammad"\n'

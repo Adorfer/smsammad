@@ -130,25 +130,72 @@ class Config:
 _NO_FALLBACK = object()
 
 
-def _unquote(value: str) -> str:
-    """Entfernt ein umschliessendes Anfuehrungszeichenpaar ("..." oder
-    '...'), falls vorhanden. configparser macht das (anders als eine Shell)
-    NICHT automatisch -- Werte mit Leerzeichen koennen so trotzdem
-    unmissverstaendlich quotiert werden, unquotierte Werte funktionieren
-    weiterhin wie bisher."""
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return value[1:-1]
-    return value
+def _unquote(value: str, section: str, option: str) -> str:
+    """Entfernt das umschliessende Anfuehrungszeichenpaar ("..." oder
+    '...') und einen optionalen '# ...'-Inline-Kommentar dahinter --
+    quote-bewusst: ein '#' INNERHALB der Anfuehrungszeichen ist niemals
+    ein Kommentaranfang. Das ist bewusst nicht ueber configparsers eigenes
+    inline_comment_prefixes geloest, weil das Anfuehrungszeichen nicht
+    versteht und z.B. '"pass # wort"' faelschlich mitten im Wert
+    abgeschnitten haette. String-Werte MUESSEN gequotet sein (kein
+    Fallback auf unquotierte Werte mehr), damit genau das eindeutig
+    entscheidbar ist."""
+    if len(value) >= 2 and value[0] in "\"'":
+        quote = value[0]
+        end = value.find(quote, 1)
+        if end != -1:
+            return value[1:end]
+    raise ConfigError(
+        f"[{section}] {option} muss in Anfuehrungszeichen stehen (\"...\" oder '...'), "
+        f"ist aber {value!r}"
+    )
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Fuer unquotierte Zahlen-/Wahrheitswerte: entfernt einen
+    '# ...'-Kommentar am Ende. Sicher ohne Quote-Ruecksicht moeglich, weil
+    Zahlen/true/false laut Konvention nie ein '#' enthalten (anders als
+    Passwoerter/Tokens, die deshalb IMMER gequotet sein muessen, siehe
+    _unquote)."""
+    match = re.search(r"\s#", value)
+    if match:
+        return value[: match.start()].rstrip()
+    return value.strip()
 
 
 def _get(
     parser: configparser.ConfigParser, section: str, option: str, fallback: object = _NO_FALLBACK
 ) -> str:
-    if fallback is _NO_FALLBACK:
-        raw = parser.get(section, option)
-    else:
-        raw = parser.get(section, option, fallback=fallback)
-    return _unquote(raw)
+    if fallback is not _NO_FALLBACK and not parser.has_option(section, option):
+        return fallback
+    return _unquote(parser.get(section, option), section, option)
+
+
+def _get_int(
+    parser: configparser.ConfigParser, section: str, option: str, fallback: object = _NO_FALLBACK
+) -> int:
+    if fallback is not _NO_FALLBACK and not parser.has_option(section, option):
+        return fallback
+    return int(_strip_inline_comment(parser.get(section, option)))
+
+
+def _get_float(
+    parser: configparser.ConfigParser, section: str, option: str, fallback: object = _NO_FALLBACK
+) -> float:
+    if fallback is not _NO_FALLBACK and not parser.has_option(section, option):
+        return fallback
+    return float(_strip_inline_comment(parser.get(section, option)))
+
+
+def _get_bool(
+    parser: configparser.ConfigParser, section: str, option: str, fallback: object = _NO_FALLBACK
+) -> bool:
+    if fallback is not _NO_FALLBACK and not parser.has_option(section, option):
+        return fallback
+    cleaned = _strip_inline_comment(parser.get(section, option)).lower()
+    if cleaned not in configparser.ConfigParser.BOOLEAN_STATES:
+        raise ConfigError(f"[{section}] {option} ist kein gueltiger Wahrheitswert: {cleaned!r}")
+    return configparser.ConfigParser.BOOLEAN_STATES[cleaned]
 
 
 def _validate_balance_regex(pattern: str, path: Path, field_name: str) -> None:
@@ -191,7 +238,7 @@ def load_config(path: Path | None = None) -> Config:
             password=_get(parser, "teltonika", "password"),
             default_country_code=_get(parser, "teltonika", "default_country_code"),
             scheme=_get(parser, "teltonika", "scheme", fallback="https"),
-            verify_tls=parser.getboolean("teltonika", "verify_tls", fallback=False),
+            verify_tls=_get_bool(parser, "teltonika", "verify_tls", fallback=False),
             short_number_prefix=_get(parser, "teltonika", "short_number_prefix", fallback=""),
             unresolved_sender_prefix=_get(
                 parser, "teltonika", "unresolved_sender_prefix", fallback="Kurzwahl:"
@@ -203,9 +250,9 @@ def load_config(path: Path | None = None) -> Config:
             group=_get(parser, "zammad", "group", fallback="Users"),
             new_customer_group=_get(parser, "zammad", "new_customer_group", fallback="Users"),
             phone_field=_get(parser, "zammad", "phone_field", fallback="mobile"),
-            overflow_priority=parser.getint("zammad", "overflow_priority", fallback=3),
-            group_from_last_ticket=parser.getboolean(
-                "zammad", "group_from_last_ticket", fallback=False
+            overflow_priority=_get_int(parser, "zammad", "overflow_priority", fallback=3),
+            group_from_last_ticket=_get_bool(
+                parser, "zammad", "group_from_last_ticket", fallback=False
             ),
         )
         stats_db_file_raw = _get(
@@ -213,12 +260,12 @@ def load_config(path: Path | None = None) -> Config:
         )
         on_overflow = _get(parser, "ticket_to_sms", "on_overflow", fallback="reject")
         ticket_to_sms = TicketToSmsConfig(
-            max_sms_parts=parser.getint("ticket_to_sms", "max_sms_parts", fallback=3),
-            max_sms_per_hour=parser.getint("ticket_to_sms", "max_sms_per_hour", fallback=20),
-            max_sms_per_24h=parser.getint("ticket_to_sms", "max_sms_per_24h", fallback=100),
+            max_sms_parts=_get_int(parser, "ticket_to_sms", "max_sms_parts", fallback=3),
+            max_sms_per_hour=_get_int(parser, "ticket_to_sms", "max_sms_per_hour", fallback=20),
+            max_sms_per_24h=_get_int(parser, "ticket_to_sms", "max_sms_per_24h", fallback=100),
             stats_db_file=Path(stats_db_file_raw).expanduser(),
-            budget_notify_cooldown_minutes=parser.getint(
-                "ticket_to_sms", "budget_notify_cooldown_minutes", fallback=60
+            budget_notify_cooldown_minutes=_get_int(
+                parser, "ticket_to_sms", "budget_notify_cooldown_minutes", fallback=60
             ),
             on_overflow=on_overflow,
         )
@@ -235,11 +282,11 @@ def load_config(path: Path | None = None) -> Config:
     if parser.has_section("notification"):
         notification = NotificationConfig(
             smtp_host=_get(parser, "notification", "smtp_host"),
-            smtp_port=parser.getint("notification", "smtp_port", fallback=587),
+            smtp_port=_get_int(parser, "notification", "smtp_port", fallback=587),
             smtp_user=_get(parser, "notification", "smtp_user"),
             smtp_password=_get(parser, "notification", "smtp_password"),
             recipient=_get(parser, "notification", "recipient"),
-            enabled=parser.getboolean("notification", "enabled", fallback=True),
+            enabled=_get_bool(parser, "notification", "enabled", fallback=True),
         )
 
     balance = None
@@ -251,11 +298,11 @@ def load_config(path: Path | None = None) -> Config:
                 f"nicht {balance_method!r}"
             )
         balance = BalanceConfig(
-            warn_threshold_eur=parser.getfloat("balance", "warn_threshold_eur"),
-            alarm_threshold_eur=parser.getfloat("balance", "alarm_threshold_eur"),
+            warn_threshold_eur=_get_float(parser, "balance", "warn_threshold_eur"),
+            alarm_threshold_eur=_get_float(parser, "balance", "alarm_threshold_eur"),
             method=balance_method,
-            query_interval_hours=parser.getint("balance", "query_interval_hours", fallback=24),
-            closed_state_id=parser.getint("balance", "closed_state_id", fallback=4),
+            query_interval_hours=_get_int(parser, "balance", "query_interval_hours", fallback=24),
+            closed_state_id=_get_int(parser, "balance", "closed_state_id", fallback=4),
             ussd_code=_get(parser, "balance", "ussd_code", fallback="*100#"),
             api_username=_get(parser, "balance", "api_username", fallback=""),
             api_password=_get(parser, "balance", "api_password", fallback=""),

@@ -2,11 +2,21 @@
 ; danach: chmod 600 config.ini (config.ini enthaelt Zugangsdaten und ist in
 ; .gitignore).
 ;
-; Alle Text-Werte hier stehen bewusst in Anfuehrungszeichen ("..." oder
-; '...', beides geht) -- damit Werte mit Leerzeichen (Gruppennamen,
-; Passwoerter, Pfade, ...) einfach so uebernommen werden koennen, ohne dass
-; man sich Gedanken um Escaping machen muss. Zahlen (z.B. max_sms_parts)
-; und true/false (z.B. verify_tls) bleiben OHNE Anfuehrungszeichen.
+; Alle Text-Werte MUESSEN in Anfuehrungszeichen stehen ("..." oder '...',
+; beides geht) -- damit Werte mit Leerzeichen (Gruppennamen, Passwoerter,
+; Pfade, ...) einfach so uebernommen werden koennen, ohne dass man sich
+; Gedanken um Escaping machen muss, und damit ein Inline-Kommentar hinter
+; dem Wert eindeutig als solcher erkennbar ist (siehe unten). Ein
+; unquotierter Text-Wert ist ein Config-Fehler, die App bricht dann mit
+; klarer Fehlermeldung ab statt den Wert stillschweigend falsch zu lesen.
+; Zahlen (z.B. max_sms_parts) und true/false (z.B. verify_tls) bleiben
+; OHNE Anfuehrungszeichen.
+;
+; Inline-Kommentare HINTER einem Wert sind erlaubt, z.B.:
+;   token = "abc123"  # mein API-Token
+;   max_sms_parts = 3  # maximal drei SMS-Teile
+; Ein '#' INNERHALB der Anfuehrungszeichen (z.B. Teil eines Passworts wie
+; "gEh middle#eim") wird NICHT als Kommentaranfang missverstanden.
 
 [teltonika]
 ; IP oder Hostname des Routers, ohne Schema

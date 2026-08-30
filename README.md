@@ -432,10 +432,20 @@ $EDITOR config.ini
 SMTP-Passwort) und **muss** `600` (nur Owner lesbar) bleiben — wird beim
 Start aktiv geprüft (`config._check_permissions`), ein zu offener Modus
 lässt die App mit klarer Fehlermeldung abbrechen statt still weiterzulaufen.
-Alle Text-Werte in der Config stehen bewusst in Anführungszeichen (`"..."`
-oder `'...'`, beides geht) — vermeidet Rückfragen zum Escaping von
-Leerzeichen in Passwörtern/Gruppennamen/Pfaden; Zahlen und `true`/`false`
-bleiben unquotiert.
+Alle Text-Werte in der Config **müssen** in Anführungszeichen stehen
+(`"..."` oder `'...'`, beides geht) — vermeidet Rückfragen zum Escaping
+von Leerzeichen in Passwörtern/Gruppennamen/Pfaden, und macht einen
+Inline-Kommentar hinter dem Wert eindeutig erkennbar (siehe unten). Ein
+unquotierter Text-Wert ist ein Config-Fehler (`ConfigError` beim Start,
+kein stiller Fallback). Zahlen und `true`/`false` bleiben unquotiert.
+
+Hinter jedem Wert darf ein `# Kommentar` stehen, z.B.
+`token = "abc123"  # mein API-Token` — configparser kennt das von Haus
+aus nicht (der komplette Rest der Zeile inkl. Anführungszeichen würde
+sonst Teil des Werts, live als kaputter Zammad-Token mit `401 Cant find
+User for Token` beobachtet), SMSammad parst das deshalb selbst,
+quote-bewusst: ein `#` **innerhalb** der Anführungszeichen (z.B. Teil
+eines Passworts) wird nicht als Kommentaranfang missverstanden.
 
 ## Ausführen
 

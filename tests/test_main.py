@@ -7,21 +7,21 @@ from smsammad.main import main
 
 CONFIG_INI = """
 [teltonika]
-host = 192.168.1.1
-username = user1
-password = pass
-default_country_code = DE
+host = "192.168.1.1"
+username = "user1"
+password = "pass"
+default_country_code = "DE"
 
 [zammad]
-url = https://zammad.example.local
-token = tok
+url = "https://zammad.example.local"
+token = "tok"
 
 [notification]
-smtp_host = mail.example.local
+smtp_host = "mail.example.local"
 smtp_port = 587
-smtp_user = bot@example.local
-smtp_password = secret
-recipient = ops@example.local
+smtp_user = "bot@example.local"
+smtp_password = "secret"
+recipient = "ops@example.local"
 enabled = true
 """
 
