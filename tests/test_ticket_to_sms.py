@@ -26,6 +26,7 @@ class FakeZammad:
         self.sent_tags_removed = []
         self.internal_notes = []
         self.priorities_set = []
+        self.states_set = []
 
     def search_tickets_by_tag(self, tag):
         assert tag == "sms-out"
@@ -56,6 +57,9 @@ class FakeZammad:
 
     def set_priority(self, ticket_id, priority_id):
         self.priorities_set.append((ticket_id, priority_id))
+
+    def set_state(self, ticket_id, state_id):
+        self.states_set.append((ticket_id, state_id))
 
     def get_group_name(self, group_id):
         return f"Gruppe-{group_id}"
@@ -487,7 +491,11 @@ def test_missing_mobile_and_phone_field_is_landline_marks_cannot_send():
     assert zammad.sent_tags_removed == [(1, "sms-out")]
     assert zammad.sent_tags_added == [(1, "sms-cannotsend")]
     assert len(zammad.internal_notes) == 1
-    assert "eine erkennbare" in zammad.internal_notes[0][1]
+    note_body = zammad.internal_notes[0][1]
+    assert "SMS-Versand nicht moeglich: \n" in note_body
+    assert "weder im Feld 'mobile', noch im Feld 'phone'" in note_body
+    assert "eine erkennbare" in note_body
+    assert zammad.priorities_set == [(1, 3)]
 
 
 def test_missing_mobile_and_no_phone_field_marks_cannot_send():
@@ -503,6 +511,51 @@ def test_missing_mobile_and_no_phone_field_marks_cannot_send():
 
     assert teltonika.sent == []
     assert zammad.sent_tags_added == [(1, "sms-cannotsend")]
+    assert zammad.priorities_set == [(1, 3)]
+
+
+def test_cannot_send_reopens_closed_ticket():
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7, "state_id": 4}},
+        users={7: {"id": 7, "mobile": ""}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert zammad.states_set == [(1, 2)]
+
+
+def test_cannot_send_reopens_pending_ticket():
+    """'Warten auf Rueckmeldung'/'pending close' o.ae. -- jeder Zustand
+    ausser 'offen' muss reaktiviert werden, nicht nur 'geschlossen'."""
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7, "state_id": 8}},
+        users={7: {"id": 7, "mobile": ""}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert zammad.states_set == [(1, 2)]
+
+
+def test_cannot_send_does_not_touch_state_when_already_open():
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7, "state_id": 2}},
+        users={7: {"id": 7, "mobile": ""}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert zammad.states_set == []
 
 
 def test_missing_mobile_dry_run_adds_no_tag_or_note():
@@ -542,6 +595,7 @@ def test_send_failure_marks_cannot_send_instead_of_crashing():
     assert budget.recorded == []
     assert len(zammad.internal_notes) == 1
     assert "no credit" in zammad.internal_notes[0][1]
+    assert zammad.priorities_set == [(1, 3)]
 
 
 def test_budget_exceeded_leaves_tag_for_retry_and_adds_note_once():

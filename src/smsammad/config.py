@@ -56,6 +56,10 @@ class ZammadConfig:
     group: str
     new_customer_group: str
     phone_field: str
+    # Prioritaets-ID fuer JEDES Ticket, das mit dem Sammel-Tag
+    # 'sms-cannotsend' markiert wird (nicht nur bei Text-Ueberlauf, trotz
+    # des Namens -- Feld existierte zuerst nur fuer den Ueberlauf-Fall,
+    # Name aus Kompatibilitaetsgruenden nicht geaendert).
     overflow_priority: int
     # Fallback-Feld, falls phone_field (Default "mobile") beim Kunden leer
     # ist: wird nur verwendet, wenn phonenumbers den dort hinterlegten Wert
@@ -63,6 +67,14 @@ class ZammadConfig:
     # empfangen). Sinnvoll, wenn Agenten Mobilfunknummern gelegentlich im
     # normalen Telefonfeld statt im Mobilfunk-Feld erfassen.
     phone_field_fallback: str = "phone"
+    # Zammad state_id fuer "open" -- Default passt zu einer Standard-
+    # Zammad-Installation (per API gegen die echte Instanz verifiziert),
+    # kann bei abweichender Installation ueberschrieben werden. Wird
+    # gesetzt, wenn ein Ticket mit 'sms-cannotsend' markiert wird und
+    # aktuell NICHT bereits offen ist (z.B. geschlossen oder in einem
+    # Warten-auf-Rueckmeldung-Zustand) -- ein SMS-Versandproblem soll nicht
+    # unbemerkt in einem nicht-aktiven Ticket verschwinden.
+    open_state_id: int = 2
     # Fuer ein neues Ticket eines BEKANNTEN Kunden ohne offenes Ticket:
     # False (Default) -- immer die feste Gruppe `group`. True -- Gruppe
     # des zuletzt kontaktierten Tickets dieses Kunden wiederverwenden
@@ -268,6 +280,10 @@ def load_config(path: Path | None = None) -> Config:
             new_customer_group=_get(parser, "zammad", "new_customer_group", fallback="Users"),
             phone_field=_get(parser, "zammad", "phone_field", fallback="mobile"),
             overflow_priority=_get_int(parser, "zammad", "overflow_priority", fallback=3),
+            phone_field_fallback=_get(
+                parser, "zammad", "phone_field_fallback", fallback="phone"
+            ),
+            open_state_id=_get_int(parser, "zammad", "open_state_id", fallback=2),
             group_from_last_ticket=_get_bool(
                 parser, "zammad", "group_from_last_ticket", fallback=False
             ),

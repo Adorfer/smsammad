@@ -617,9 +617,13 @@ gespeichert worden.
   gefunden, Text-Überlauf im `reject`-Modus, oder der Router hat den
   Versand selbst abgelehnt (z.B. kein SMS-Guthaben mehr auf der
   SIM-Karte, Netzwerk-/Zugangsproblem). In allen Fällen wird `sms-out`
-  entfernt (kein stiller Endlos-Retry mehr) und eine interne Notiz mit
-  der Ursache hinterlegt -- Agent behebt die Ursache und setzt `sms-out`
-  danach erneut, um einen neuen Versandversuch auszulösen.
+  entfernt (kein stiller Endlos-Retry mehr), eine interne Notiz mit der
+  Ursache hinterlegt, die Priorität auf `overflow_priority` gesetzt und
+  das Ticket -- falls es gerade geschlossen oder in einem
+  Warten-auf-Rückmeldung-Zustand steht -- wieder auf `open_state_id`
+  (Default `2` = "offen") gesetzt, damit das Problem nicht unbemerkt in
+  einem inaktiven Ticket verschwindet. Agent behebt die Ursache und setzt
+  `sms-out` danach erneut, um einen neuen Versandversuch auszulösen.
 - **Versand-Quittung**: jede erfolgreich gesendete SMS bekommt eine
   interne Notiz mit Zeichenzahl, Teilanzahl, Zeitstempel und dem exakt
   gesendeten Text (jeder Teil einzeln in `"..."`, damit Anfang/Ende klar

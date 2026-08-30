@@ -108,9 +108,40 @@ def _resolve_send_number(customer: dict, config: Config) -> str | None:
     return None
 
 
+def _mark_cannot_send(
+    ticket_id: int,
+    ticket_number: str,
+    current_state_id: int | None,
+    note: str,
+    zammad: ZammadClient,
+    config: Config,
+    extra_tags: tuple[str, ...] = (),
+) -> None:
+    """Gemeinsame Behandlung fuer alle 'Versand nicht moeglich'-Faelle:
+    Tag(s) setzen, Vermerk hinterlegen, Prioritaet hochsetzen und -- falls
+    das Ticket gerade NICHT offen ist (z.B. geschlossen oder in einem
+    Warten-auf-Rueckmeldung-Zustand) -- wieder auf 'offen' setzen, damit
+    ein Versandproblem nicht unbemerkt in einem inaktiven Ticket
+    verschwindet.
+    """
+    zammad.remove_tag(ticket_id, TAG_OUT)
+    for tag in extra_tags:
+        zammad.add_tag(ticket_id, tag)
+    zammad.add_tag(ticket_id, TAG_CANNOT_SEND)
+    zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
+    zammad.set_priority(ticket_id, config.zammad.overflow_priority)
+    if current_state_id is not None and current_state_id != config.zammad.open_state_id:
+        zammad.set_state(ticket_id, config.zammad.open_state_id)
+    logger.warning(
+        "Ticket %s: SMS-Versand nicht moeglich, Agent wurde per Vermerk informiert",
+        ticket_number,
+    )
+
+
 def _handle_no_number(
     ticket_id: int,
     ticket_number: str,
+    current_state_id: int | None,
     zammad: ZammadClient,
     config: Config,
     dry_run: bool,
@@ -118,29 +149,25 @@ def _handle_no_number(
     if dry_run:
         logger.info(
             "[dry-run] Ticket %s: keine Mobilfunknummer gefunden (Felder '%s'/'%s'), "
-            "wuerde Tag '%s' setzen und internen Vermerk hinzufuegen",
+            "wuerde Tag '%s' setzen, Prioritaet auf %s setzen, internen Vermerk "
+            "hinzufuegen und ggf. wieder oeffnen",
             ticket_number,
             config.zammad.phone_field,
             config.zammad.phone_field_fallback,
             TAG_CANNOT_SEND,
+            config.zammad.overflow_priority,
         )
         return
 
     note = (
-        f"SMS-Versand nicht moeglich: Kunde hat weder im Feld "
-        f"'{config.zammad.phone_field}' noch im Feld "
-        f"'{config.zammad.phone_field_fallback}' eine erkennbare "
-        f"Mobilfunknummer hinterlegt. Bitte Nummer im Kundendatensatz "
-        f"ergaenzen/korrigieren, danach Tag '{TAG_OUT}' erneut setzen, um einen "
-        f"neuen Versandversuch auszuloesen."
+        f"SMS-Versand nicht moeglich: \n"
+        f"Kunde hat weder im Feld '{config.zammad.phone_field}', noch im Feld "
+        f"'{config.zammad.phone_field_fallback}' eine erkennbare Mobilfunknummer "
+        f"hinterlegt.\n"
+        f"Bitte Nummer im Kundendatensatz ergaenzen/korrigieren, danach Tag "
+        f"'{TAG_OUT}' erneut setzen, um einen neuen Versandversuch auszuloesen."
     )
-    zammad.remove_tag(ticket_id, TAG_OUT)
-    zammad.add_tag(ticket_id, TAG_CANNOT_SEND)
-    zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
-    logger.warning(
-        "Ticket %s: keine Mobilfunknummer gefunden, Agent wurde per Vermerk informiert",
-        ticket_number,
-    )
+    _mark_cannot_send(ticket_id, ticket_number, current_state_id, note, zammad, config)
 
 
 def _process_one(
@@ -154,10 +181,11 @@ def _process_one(
 ) -> None:
     ticket = zammad.get_ticket(ticket_id)
     ticket_number = ticket["number"]
+    current_state_id = ticket.get("state_id")
     customer = zammad.get_user(ticket["customer_id"])
     number = _resolve_send_number(customer, config)
     if number is None:
-        _handle_no_number(ticket_id, ticket_number, zammad, config, dry_run)
+        _handle_no_number(ticket_id, ticket_number, current_state_id, zammad, config, dry_run)
         return
 
     articles = zammad.get_ticket_articles(ticket_id)
@@ -193,6 +221,7 @@ def _process_one(
             _send(
                 ticket_id,
                 ticket_number,
+                current_state_id,
                 number,
                 text,
                 parts[:max_parts],
@@ -208,13 +237,21 @@ def _process_one(
             )
         else:
             _handle_overflow_reject(
-                ticket_id, ticket_number, len(parts), max_parts, zammad, config, dry_run
+                ticket_id,
+                ticket_number,
+                current_state_id,
+                len(parts),
+                max_parts,
+                zammad,
+                config,
+                dry_run,
             )
         return
 
     _send(
         ticket_id,
         ticket_number,
+        current_state_id,
         number,
         text,
         parts,
@@ -267,6 +304,7 @@ def _low_balance_hint(config: Config, budget: SmsBudget) -> str | None:
 def _send(
     ticket_id: int,
     ticket_number: str,
+    current_state_id: int | None,
     number: str,
     text: str,
     parts: list[str],
@@ -302,7 +340,7 @@ def _send(
         for part in parts:
             teltonika.send(number, part)
     except TeltonikaError as exc:
-        _handle_send_failed(ticket_id, ticket_number, exc, zammad)
+        _handle_send_failed(ticket_id, ticket_number, current_state_id, exc, zammad, config)
         return
     budget.record_sent(len(parts), group=group_name, agent=agent, ticket_number=ticket_number)
 
@@ -324,8 +362,10 @@ def _send(
 def _handle_send_failed(
     ticket_id: int,
     ticket_number: str,
+    current_state_id: int | None,
     error: Exception,
     zammad: ZammadClient,
+    config: Config,
 ) -> None:
     """Der Router hat den Sendeversuch selbst abgelehnt/ist nicht
     erreichbar -- z.B. kein SMS-Guthaben mehr auf der SIM-Karte, oder ein
@@ -340,14 +380,8 @@ def _handle_send_failed(
         "Guthaben/Router pruefen und danach Tag "
         f"'{TAG_OUT}' erneut setzen, um einen neuen Versandversuch auszuloesen."
     )
-    zammad.remove_tag(ticket_id, TAG_OUT)
-    zammad.add_tag(ticket_id, TAG_CANNOT_SEND)
-    zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
-    logger.error(
-        "Ticket %s: SMS-Versand fehlgeschlagen (%s), Agent wurde per Vermerk informiert",
-        ticket_number,
-        error,
-    )
+    logger.error("Ticket %s: SMS-Versand fehlgeschlagen (%s)", ticket_number, error)
+    _mark_cannot_send(ticket_id, ticket_number, current_state_id, note, zammad, config)
 
 
 def _handle_budget_blocked(
@@ -399,6 +433,7 @@ def _handle_budget_blocked(
 def _handle_overflow_reject(
     ticket_id: int,
     ticket_number: str,
+    current_state_id: int | None,
     part_count: int,
     max_parts: int,
     zammad: ZammadClient,
@@ -415,7 +450,7 @@ def _handle_overflow_reject(
     if dry_run:
         logger.info(
             "[dry-run] Ticket %s: Ueberlauf (%d > %d Teile), wuerde Tags '%s'/'%s' setzen, "
-            "internen Vermerk hinzufuegen und Prioritaet auf %s setzen",
+            "internen Vermerk hinzufuegen, Prioritaet auf %s setzen und ggf. wieder oeffnen",
             ticket_number,
             part_count,
             max_parts,
@@ -425,12 +460,9 @@ def _handle_overflow_reject(
         )
         return
 
-    zammad.remove_tag(ticket_id, TAG_OUT)
-    zammad.add_tag(ticket_id, TAG_OVERFLOW)
-    zammad.add_tag(ticket_id, TAG_CANNOT_SEND)
-    zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
-    zammad.set_priority(ticket_id, config.zammad.overflow_priority)
-    logger.warning("Ticket %s: SMS-Ueberlauf, Agent wurde per Vermerk informiert", ticket_number)
+    _mark_cannot_send(
+        ticket_id, ticket_number, current_state_id, note, zammad, config, extra_tags=(TAG_OVERFLOW,)
+    )
 
 
 def _format_breakdown(budget: SmsBudget) -> str:

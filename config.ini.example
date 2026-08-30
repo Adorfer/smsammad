@@ -74,8 +74,14 @@ phone_field = "mobile"
 ; genutzt, wenn der dortige Wert tatsaechlich als Mobilfunknummer erkannt
 ; wird (eine Festnetznummer kann keine SMS empfangen)
 phone_field_fallback = "phone"
-; Prioritaets-ID, die bei SMS-Ueberlauf (zu viele Teile) gesetzt wird
+; Prioritaets-ID, die bei jedem Tag 'sms-cannotsend' gesetzt wird (nicht
+; nur bei SMS-Ueberlauf, trotz des Namens)
 overflow_priority = 3
+; Zammad state_id fuer "offen" -- Standard-Zammad-Installationen nutzen 2,
+; bei Abweichungen ueber 'GET /api/v1/ticket_states' pruefen. Wird gesetzt,
+; wenn ein Ticket mit 'sms-cannotsend' markiert wird und aktuell nicht
+; bereits offen ist (z.B. geschlossen oder "Warten auf Rueckmeldung")
+open_state_id = 2
 
 [ticket_to_sms]
 ; maximale Anzahl SMS-Teile
