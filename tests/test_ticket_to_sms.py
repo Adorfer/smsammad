@@ -27,6 +27,7 @@ class FakeZammad:
         self.internal_notes = []
         self.priorities_set = []
         self.states_set = []
+        self.ticket_updates = []
 
     def search_tickets_by_tag(self, tag):
         assert tag == "sms-out"
@@ -60,6 +61,13 @@ class FakeZammad:
 
     def set_state(self, ticket_id, state_id):
         self.states_set.append((ticket_id, state_id))
+
+    def update_ticket(self, ticket_id, **fields):
+        self.ticket_updates.append((ticket_id, dict(fields)))
+        if "priority_id" in fields:
+            self.priorities_set.append((ticket_id, fields["priority_id"]))
+        if "state_id" in fields:
+            self.states_set.append((ticket_id, fields["state_id"]))
 
     def get_group_name(self, group_id):
         return f"Gruppe-{group_id}"
@@ -556,6 +564,44 @@ def test_cannot_send_does_not_touch_state_when_already_open():
     ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
 
     assert zammad.states_set == []
+
+
+def test_cannot_send_repairs_blank_title_in_same_update():
+    """Regression: ein Ticket mit leerem title (in der Zammad-UI als '-'
+    angezeigt) liess laut Live-Traceback SELBST ein reines
+    priority_id-Update mit HTTP 422 'Missing required value for field
+    title' scheitern, weil Zammad bei jedem PUT das gesamte Modell
+    validiert. Titel-Fix muss daher im GLEICHEN update_ticket()-Aufruf wie
+    priority_id/state_id passieren, nicht als separater Request."""
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7, "state_id": 4, "title": ""}},
+        users={7: {"id": 7, "mobile": ""}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert len(zammad.ticket_updates) == 1
+    ticket_id, fields = zammad.ticket_updates[0]
+    assert ticket_id == 1
+    assert fields == {"priority_id": 3, "state_id": 2, "title": "SMS-Ticket 1001"}
+
+
+def test_cannot_send_leaves_existing_title_untouched():
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7, "title": "Bestehender Titel"}},
+        users={7: {"id": 7, "mobile": ""}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika()
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    ticket_id, fields = zammad.ticket_updates[0]
+    assert "title" not in fields
 
 
 def test_missing_mobile_dry_run_adds_no_tag_or_note():

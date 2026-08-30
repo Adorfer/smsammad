@@ -285,6 +285,17 @@ class ZammadClient:
     def set_state(self, ticket_id: int, state_id: int) -> None:
         self._request("PUT", f"tickets/{ticket_id}", json={"state_id": state_id})
 
+    def update_ticket(self, ticket_id: int, **fields: Any) -> None:
+        """Wie set_priority/set_state, aber mehrere Felder in EINEM PUT --
+        Zammad validiert bei jedem Ticket-Update das GESAMTE Modell (Rails-
+        Verhalten), nicht nur die uebergebenen Felder. Live beobachtet: ein
+        Ticket mit leerem `title` (in der Zammad-UI als "-" angezeigt)
+        ließ selbst ein reines priority_id-Update mit HTTP 422 "Missing
+        required value for field 'title'" scheitern -- daher muss ein
+        Titel-Fix im selben Request wie die eigentliche Aenderung erfolgen.
+        """
+        self._request("PUT", f"tickets/{ticket_id}", json=fields)
+
     def set_subject(self, ticket_id: int, subject: str) -> None:
         self._request("PUT", f"tickets/{ticket_id}", json={"title": subject})
 

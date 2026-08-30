@@ -112,6 +112,7 @@ def _mark_cannot_send(
     ticket_id: int,
     ticket_number: str,
     current_state_id: int | None,
+    current_title: str | None,
     note: str,
     zammad: ZammadClient,
     config: Config,
@@ -129,9 +130,19 @@ def _mark_cannot_send(
         zammad.add_tag(ticket_id, tag)
     zammad.add_tag(ticket_id, TAG_CANNOT_SEND)
     zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
-    zammad.set_priority(ticket_id, config.zammad.overflow_priority)
+
+    fields: dict[str, object] = {"priority_id": config.zammad.overflow_priority}
     if current_state_id is not None and current_state_id != config.zammad.open_state_id:
-        zammad.set_state(ticket_id, config.zammad.open_state_id)
+        fields["state_id"] = config.zammad.open_state_id
+    if not current_title:
+        # Live beobachtet: ein Ticket mit leerem title (Zammad-UI zeigt
+        # "-") laesst JEDES Update scheitern (HTTP 422 "Missing required
+        # value for field 'title'"), da Zammad bei jedem PUT das gesamte
+        # Modell validiert, nicht nur die uebergebenen Felder. Titel-Fix
+        # daher zwingend im selben Request wie priority_id/state_id.
+        fields["title"] = f"SMS-Ticket {ticket_number}"
+    zammad.update_ticket(ticket_id, **fields)
+
     logger.warning(
         "Ticket %s: SMS-Versand nicht moeglich, Agent wurde per Vermerk informiert",
         ticket_number,
@@ -142,6 +153,7 @@ def _handle_no_number(
     ticket_id: int,
     ticket_number: str,
     current_state_id: int | None,
+    current_title: str | None,
     zammad: ZammadClient,
     config: Config,
     dry_run: bool,
@@ -167,7 +179,7 @@ def _handle_no_number(
         f"Bitte Nummer im Kundendatensatz ergaenzen/korrigieren, danach Tag "
         f"'{TAG_OUT}' erneut setzen, um einen neuen Versandversuch auszuloesen."
     )
-    _mark_cannot_send(ticket_id, ticket_number, current_state_id, note, zammad, config)
+    _mark_cannot_send(ticket_id, ticket_number, current_state_id, current_title, note, zammad, config)
 
 
 def _process_one(
@@ -182,10 +194,13 @@ def _process_one(
     ticket = zammad.get_ticket(ticket_id)
     ticket_number = ticket["number"]
     current_state_id = ticket.get("state_id")
+    current_title = ticket.get("title")
     customer = zammad.get_user(ticket["customer_id"])
     number = _resolve_send_number(customer, config)
     if number is None:
-        _handle_no_number(ticket_id, ticket_number, current_state_id, zammad, config, dry_run)
+        _handle_no_number(
+            ticket_id, ticket_number, current_state_id, current_title, zammad, config, dry_run
+        )
         return
 
     articles = zammad.get_ticket_articles(ticket_id)
@@ -222,6 +237,7 @@ def _process_one(
                 ticket_id,
                 ticket_number,
                 current_state_id,
+                current_title,
                 number,
                 text,
                 parts[:max_parts],
@@ -240,6 +256,7 @@ def _process_one(
                 ticket_id,
                 ticket_number,
                 current_state_id,
+                current_title,
                 len(parts),
                 max_parts,
                 zammad,
@@ -252,6 +269,7 @@ def _process_one(
         ticket_id,
         ticket_number,
         current_state_id,
+        current_title,
         number,
         text,
         parts,
@@ -305,6 +323,7 @@ def _send(
     ticket_id: int,
     ticket_number: str,
     current_state_id: int | None,
+    current_title: str | None,
     number: str,
     text: str,
     parts: list[str],
@@ -340,7 +359,9 @@ def _send(
         for part in parts:
             teltonika.send(number, part)
     except TeltonikaError as exc:
-        _handle_send_failed(ticket_id, ticket_number, current_state_id, exc, zammad, config)
+        _handle_send_failed(
+            ticket_id, ticket_number, current_state_id, current_title, exc, zammad, config
+        )
         return
     budget.record_sent(len(parts), group=group_name, agent=agent, ticket_number=ticket_number)
 
@@ -363,6 +384,7 @@ def _handle_send_failed(
     ticket_id: int,
     ticket_number: str,
     current_state_id: int | None,
+    current_title: str | None,
     error: Exception,
     zammad: ZammadClient,
     config: Config,
@@ -381,7 +403,7 @@ def _handle_send_failed(
         f"'{TAG_OUT}' erneut setzen, um einen neuen Versandversuch auszuloesen."
     )
     logger.error("Ticket %s: SMS-Versand fehlgeschlagen (%s)", ticket_number, error)
-    _mark_cannot_send(ticket_id, ticket_number, current_state_id, note, zammad, config)
+    _mark_cannot_send(ticket_id, ticket_number, current_state_id, current_title, note, zammad, config)
 
 
 def _handle_budget_blocked(
@@ -434,6 +456,7 @@ def _handle_overflow_reject(
     ticket_id: int,
     ticket_number: str,
     current_state_id: int | None,
+    current_title: str | None,
     part_count: int,
     max_parts: int,
     zammad: ZammadClient,
@@ -461,7 +484,14 @@ def _handle_overflow_reject(
         return
 
     _mark_cannot_send(
-        ticket_id, ticket_number, current_state_id, note, zammad, config, extra_tags=(TAG_OVERFLOW,)
+        ticket_id,
+        ticket_number,
+        current_state_id,
+        current_title,
+        note,
+        zammad,
+        config,
+        extra_tags=(TAG_OVERFLOW,),
     )
 
 

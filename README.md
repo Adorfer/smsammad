@@ -624,6 +624,12 @@ gespeichert worden.
   (Default `2` = "offen") gesetzt, damit das Problem nicht unbemerkt in
   einem inaktiven Ticket verschwindet. Agent behebt die Ursache und setzt
   `sms-out` danach erneut, um einen neuen Versandversuch auszulösen.
+  Priorität/Status/Titel werden dabei in EINEM API-Aufruf gesetzt: Zammad
+  validiert bei jedem Ticket-Update das gesamte Modell (nicht nur die
+  geänderten Felder), ein Ticket mit leerem Titel (Zammad-UI zeigt "-")
+  ließ deshalb live selbst ein reines Prioritäts-Update mit HTTP 422
+  scheitern -- SMSammad vergibt in diesem Fall automatisch einen
+  Platzhalter-Titel (`"SMS-Ticket {Ticketnummer}"`) im selben Request.
 - **Versand-Quittung**: jede erfolgreich gesendete SMS bekommt eine
   interne Notiz mit Zeichenzahl, Teilanzahl, Zeitstempel und dem exakt
   gesendeten Text (jeder Teil einzeln in `"..."`, damit Anfang/Ende klar
