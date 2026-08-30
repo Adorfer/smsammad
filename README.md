@@ -113,6 +113,30 @@ SMS-Cloud-Anbieter wurde dieser Weg schließlich aufgegeben. Ein eigenes,
 physisches SMS-Gateway (Router + Prepaid-SIM) umgeht das Problem
 komplett.
 
+Und warum dann ausgerechnet ein vergleichsweise teurer industrieller
+Router statt einer günstigeren Hardware-Lösung? Zwei naheliegende
+Alternativen wurden vorher ausprobiert und wieder verworfen:
+
+- **Altes Smartphone dauerhaft am USB-Kabel**: scheitert mittelfristig an
+  der Akku-Problematik -- ein Akku, der dauerhaft am Ladegerät hängt,
+  degradiert und fällt irgendwann aus, das Gerät wird damit zum
+  Wartungsfall statt zur "install and forget"-Lösung.
+- **Handelsübliche USB-Mobilfunk-Dongles**: zwei Probleme gleichzeitig.
+  Erstens ist der Mobilfunkempfang an einem typischen fensterlosen
+  Server-/Kellerstandort für einen kleinen internen Dongle-Antenne oft zu
+  schwach. Zweitens sind reine UMTS/3G-Dongles nach der UMTS-Abschaltung
+  faktisch ausgestorben, und die aktuell erhältlichen "Dongles" sind in
+  Wirklichkeit meist eigenständige kleine IP-Router ohne dokumentierte
+  Mobilfunk-/SMS-API (die USB-Schnittstelle liefert nur noch eine
+  virtuelle Netzwerkkarte für den Internetzugang, keinen AT-Kommando-
+  Zugriff mehr).
+
+Ein industrieller Router wie der RUT240 ist dagegen für exakt diesen
+Einsatzzweck gebaut: dauerbetriebstauglich (kein Akku), robuste
+Bauform, externe Antennenanschlüsse (löst das Empfangsproblem im
+Keller), und eine langzeitstabile, dokumentierte (wenn auch lückenhafte,
+siehe unten) API.
+
 ### Warum HTTP-API statt E-Mail/POP3
 
 Der Router kann SMS grundsätzlich auch per E-Mail (SMS→Mail-Weiterleitung,
