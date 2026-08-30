@@ -16,6 +16,7 @@ Ohne konfigurierte Fallback-Methode wird der Fehler normal durchgereicht
 (ueblicher Fehlermail-Pfad in main.py).
 """
 
+import html
 import logging
 import re
 
@@ -29,6 +30,27 @@ from .zammad import ZammadClient
 logger = logging.getLogger("smsammad")
 
 _FALLBACK_TRIGGERS = (TeltonikaError, TeltonikaApiError, ValueError)
+
+# Live beobachteter RutOS-Firmware-Bug beim USSD-Decoding: das erste Byte
+# einer UTF-8-Mehrbyte-Sequenz (0xC3, Beginn aller deutschen Umlaute/ß)
+# wird zu einem literalen "?", das zweite Byte rutscht roh als
+# Latin-1-Zeichen durch -- z.B. "ä" (UTF-8: 0xC3 0xA4) wird zu "?¤". Das
+# urspruengliche Zeichen ist zu dem Zeitpunkt, an dem die JSON-Antwort bei
+# uns ankommt, bereits unwiderruflich weg (kein Encoding-Label-Fehler, den
+# man clientseitig umkehren koennte) -- hier nur die BISHER LIVE
+# BEOBACHTETEN Faelle als rein kosmetische Korrektur, damit das Ticket
+# lesbar bleibt. Bei weiteren beobachteten Faellen (z.B. "ü", "ö", "ß")
+# hier ergaenzen.
+_KNOWN_USSD_MOJIBAKE = {
+    "W?¤hl": "Wähl",
+}
+
+
+def _cleanup_ussd_text(text: str) -> str:
+    text = html.unescape(text)
+    for broken, fixed in _KNOWN_USSD_MOJIBAKE.items():
+        text = text.replace(broken, fixed)
+    return text
 
 
 def _parse_ussd_balance(text: str, pattern: str) -> float | None:
@@ -60,6 +82,7 @@ def _run_ussd(
 
     api = TeltonikaApiClient(config.teltonika.host, balance_config, verify_tls=config.teltonika.verify_tls)
     response_text = api.send_ussd(balance_config.ussd_code)  # -> TeltonikaApiError bei Zugriffsfehlern
+    response_text = _cleanup_ussd_text(response_text)
 
     amount_eur = _parse_ussd_balance(response_text, balance_config.ussd_balance_regex)
     if amount_eur is None:

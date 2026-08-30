@@ -632,6 +632,21 @@ Der Betrag wird aus der USSD-Antwort per Regex geparst -- konfigurierbar
 über `ussd_balance_regex` in `config.ini` (Default zugeschnitten auf das
 Menü-Format von Vodafone Callya, z.B. `"Aktuelles Guthaben: 25,77 EUR"`).
 
+**Bekannte kosmetische Macke**: die rohe USSD-Antwort landet unverändert
+als öffentlicher Artikel im Ticket, inkl. `&amp;`-artiger HTML-Entities
+(werden per `html.unescape()` aufgelöst) und eines live beobachteten
+RutOS-Firmware-Bugs beim Zeichensatz: das erste Byte einer
+UTF-8-Mehrbyte-Sequenz (0xC3, Beginn aller deutschen Umlaute/ß) wird
+beim USSD-Decoding im Router selbst zu einem literalen `"?"`, das zweite
+Byte rutscht roh als Latin-1-Zeichen durch -- z.B. wird `"ä"` (UTF-8:
+`0xC3 0xA4`) zu `"?¤"`. Das Zeichen ist zu dem Zeitpunkt, an dem die
+JSON-Antwort bei uns ankommt, bereits unwiderruflich weg; **kein**
+Encoding-Label-Fehler, den man clientseitig allgemein umkehren könnte.
+`balance_check._cleanup_ussd_text()` korrigiert deshalb nur die bisher
+live beobachteten Einzelfälle als rein kosmetischen Workaround
+(`_KNOWN_USSD_MOJIBAKE`) -- bei weiteren beobachteten kaputten Umlauten
+dort ergänzen.
+
 ### `method = "sms"`
 
 Schickt eine Abfrage-SMS (z.B. "Guthaben" an die Kurzwahl `"111"`) an die

@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from smsammad import balance_check
+from smsammad.balance_check import _cleanup_ussd_text
 from smsammad.config import (
     BalanceConfig,
     Config,
@@ -206,6 +207,46 @@ def test_ussd_method_uses_configurable_regex_for_changed_provider_wording(tmp_pa
         balance_check.run(teltonika, zammad, config, dry_run=False, budget=budget)
 
     assert budget.latest_balance()[1] == 12.34
+
+
+def test_cleanup_ussd_text_decodes_html_entities():
+    assert _cleanup_ussd_text("Guthaben &amp; Verbrauch") == "Guthaben & Verbrauch"
+
+
+def test_cleanup_ussd_text_fixes_known_mojibake():
+    """Live beobachteter RutOS-Firmware-Bug: 'ae' (UTF-8 0xC3 0xA4) wird
+    beim USSD-Decoding zu '?¤' -- rein kosmetischer Fix fuer den
+    bisher beobachteten Fall."""
+    assert _cleanup_ussd_text("W?¤hl bitte aus:") == "Wähl bitte aus:"
+
+
+def test_cleanup_ussd_text_leaves_normal_text_unchanged():
+    assert _cleanup_ussd_text("Aktuelles Guthaben: 25,77 EUR") == "Aktuelles Guthaben: 25,77 EUR"
+
+
+def test_ussd_method_cleans_up_real_captured_response(tmp_path):
+    """Regression: exakt die live am echten Router beobachtete, kaputte
+    Antwort -- Ticket-Body muss lesbar sein, keine '&amp;'/'?¤'-Reste."""
+    teltonika = FakeTeltonika()
+    zammad = FakeZammad()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+    config = _config(tmp_path, balance=_ussd_only())
+    real_response = (
+        "2026-08-30 00:33:30 1,Aktuelles Guthaben: 25,77 EUR\r\n"
+        "Bonus-Guthaben: 9,49 EUR\r\nW?¤hl bitte aus:\r\n1 Aufladen\r\n"
+        "2 Guthaben &amp; Verbrauch\r\n3 Tarife &amp; Optionen\r\n"
+        "0 Weitere Optionen,15\n"
+    )
+
+    with patch("smsammad.balance_check.TeltonikaApiClient") as api_cls:
+        api_cls.return_value.send_ussd.return_value = real_response
+        balance_check.run(teltonika, zammad, config, dry_run=False, budget=budget)
+
+    body = zammad.created_tickets[0][3]
+    assert "&amp;" not in body
+    assert "?¤" not in body
+    assert "Wähl bitte aus" in body
+    assert "Guthaben & Verbrauch" in body
 
 
 def test_ussd_method_creates_ticket_and_records_balance(tmp_path):
