@@ -419,6 +419,10 @@ Python-Umgebungs-Management für ein so kleines, einzeln deploytes Tool):
 sudo apt-get install python3-requests python3-phonenumbers python3-pytest python3-responses
 ```
 
+Fehlt eines der Laufzeit-Pakete (`python3-requests`/`python3-phonenumbers`)
+beim Start, zeigt `run.py` statt eines rohen Tracebacks eine kurze
+Fehlermeldung mit fertigem, kopierbarem `apt-get install`-Befehl.
+
 Config anlegen (siehe `config.ini.example` für alle Optionen und deren
 Kommentare):
 
