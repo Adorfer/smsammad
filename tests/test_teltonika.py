@@ -15,7 +15,7 @@ REAL_SMS_LIST_RESPONSE = (
     "Index: 0\n"
     "Date: Sat Oct 26 16:42:24 2024\n"
     "Sender: 22543\n"
-    "Text: Kurzwahl-Systemnachricht ohne Rufnummer\n"
+    "Text: Kurzwahl:Systemnachricht ohne Rufnummer\n"
     "Status: read\n"
     "------------------------------\n"
 )
@@ -61,7 +61,7 @@ def test_list_messages_parses_real_plaintext_format(client):
 
     assert messages[1].index == 0
     assert messages[1].sender == "22543"
-    assert messages[1].text == "Kurzwahl-Systemnachricht ohne Rufnummer"
+    assert messages[1].text == "Kurzwahl:Systemnachricht ohne Rufnummer"
 
 
 @responses.activate

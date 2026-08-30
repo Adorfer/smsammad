@@ -17,7 +17,7 @@ class ZammadError(Exception):
 def _phone_matches(raw_value: str, target_e164: str, default_region: str) -> bool:
     """Vergleicht eine roh in Zammad gespeicherte Rufnummer (beliebig
     formatiert, z.B. "+49 172 1234567") mit einer bereits normalisierten
-    Ziel-Nummer. Exakter Treffer zuerst (deckt unsere eigenen "Kurzwahl-..."-
+    Ziel-Nummer. Exakter Treffer zuerst (deckt unsere eigenen "Kurzwahl:..."-
     Werte ab, die immer gleich formatiert sind), sonst Vergleich ueber
     phonenumbers-Normalisierung."""
     if raw_value == target_e164:
@@ -32,7 +32,7 @@ def _search_token(value: str) -> str:
     """Letztes alphanumerisches Zammad-Suchtoken eines Werts (Zammads
     Volltextsuche tokenisiert an nicht-alphanumerischen Zeichen und matcht
     nur ganze Tokens). Funktioniert sowohl fuer Rufnummern
-    ("+49 172 1234567" -> "1234567") als auch fuer "Kurzwahl-CALLYA" ->
+    ("+49 172 1234567" -> "1234567") als auch fuer "Kurzwahl:CALLYA" ->
     "CALLYA"."""
     tokens = re.findall(r"[0-9A-Za-z]+", value)
     if not tokens:
@@ -100,7 +100,7 @@ class ZammadClient:
 
         field = self._config.phone_field
         # Fuer echte Rufnummern menschenlesbar formatiert (z.B.
-        # "0172 1234 4567"); "Kurzwahl-..."-Werte sind bereits lesbar und
+        # "0172 1234 4567"); "Kurzwahl:..."-Werte sind bereits lesbar und
         # bleiben unveraendert (keine gueltige Rufnummer, to_human_readable
         # wuerde PhoneNumberError werfen).
         try:

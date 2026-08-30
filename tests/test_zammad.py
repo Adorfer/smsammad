@@ -79,25 +79,25 @@ def test_create_customer_uses_human_readable_number_and_sms_names(client):
 
 @responses.activate
 def test_create_customer_keeps_unresolved_sender_id_verbatim(client):
-    """Fuer 'Kurzwahl-CALLYA' (keine echte Rufnummer) darf keine
+    """Fuer 'Kurzwahl:CALLYA' (keine echte Rufnummer) darf keine
     Human-Readable-Formatierung versucht werden -- der Wert bleibt roh."""
     responses.add(responses.GET, f"{BASE}/users/search", json=[])
     responses.add(responses.POST, f"{BASE}/users", json={"id": 100})
 
-    client.find_or_create_customer_by_phone("Kurzwahl-CALLYA", "DE")
+    client.find_or_create_customer_by_phone("Kurzwahl:CALLYA", "DE")
 
     payload = json.loads(responses.calls[-1].request.body)
-    assert payload["lastname"] == "Kurzwahl-CALLYA"
-    assert payload["mobile"] == "Kurzwahl-CALLYA"
-    assert payload["login"] == "Kurzwahl-CALLYA"
+    assert payload["lastname"] == "Kurzwahl:CALLYA"
+    assert payload["mobile"] == "Kurzwahl:CALLYA"
+    assert payload["login"] == "Kurzwahl:CALLYA"
 
 
 @responses.activate
 def test_find_existing_customer_with_alphanumeric_sender_id(client):
     responses.add(
-        responses.GET, f"{BASE}/users/search", json=[{"id": 66, "mobile": "Kurzwahl-CALLYA"}]
+        responses.GET, f"{BASE}/users/search", json=[{"id": 66, "mobile": "Kurzwahl:CALLYA"}]
     )
-    assert client.find_customer_by_phone("Kurzwahl-CALLYA", "DE") == 66
+    assert client.find_customer_by_phone("Kurzwahl:CALLYA", "DE") == 66
 
 
 @responses.activate

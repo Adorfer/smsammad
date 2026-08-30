@@ -35,7 +35,7 @@ class TeltonikaConfig:
     # Versand wird der Praefix erkannt, entfernt und der Rest roh als
     # Sendeziel verwendet -- ermoeglicht auch Antworten an Kurzwahlen/
     # alphanumerische Absender. Leer = roher Absender-String ohne Praefix.
-    unresolved_sender_prefix: str = "Kurzwahl-"
+    unresolved_sender_prefix: str = "Kurzwahl:"
 
 
 @dataclass
@@ -186,7 +186,7 @@ def load_config(path: Path | None = None) -> Config:
             verify_tls=parser.getboolean("teltonika", "verify_tls", fallback=False),
             short_number_prefix=_get(parser, "teltonika", "short_number_prefix", fallback=""),
             unresolved_sender_prefix=_get(
-                parser, "teltonika", "unresolved_sender_prefix", fallback="Kurzwahl-"
+                parser, "teltonika", "unresolved_sender_prefix", fallback="Kurzwahl:"
             ),
         )
         zammad = ZammadConfig(

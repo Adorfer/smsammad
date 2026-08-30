@@ -182,8 +182,8 @@ anrufbare Teilnehmerrufnummer ist. Deshalb (`sms_to_ticket._looks_like_complete_
 wird ein direkter Parse-Versuch nur unternommen, wenn der rohe Absender
 bereits wie eine vollständige Nummer aussieht (`+49...` oder `01...`);
 alles andere geht über die konfigurierbare `short_number_prefix`-
-Rekonstruktion bzw. landet unverändert als Kurzwahl-Absender-ID
-(`unresolved_sender_prefix`, Default `"Kurzwahl-"`). Der Rückweg
+Rekonstruktion bzw. landet unverändert als Kurzwahl:Absender-ID
+(`unresolved_sender_prefix`, Default `"Kurzwahl:"`). Der Rückweg
 (`ticket_to_sms._resolve_destination_number`) erkennt den Präfix wieder,
 entfernt ihn und sendet roh an genau diesen Absender zurück — so
 funktionieren auch Antworten an Kurzwahlen oder alphanumerische
@@ -303,7 +303,7 @@ abhaengig zu machen, liegt sie in einem dritten, von beiden importierten
 Modul (`balance_ticket.apply_balance_result`). Fuer USSD-Ergebnisse gibt
 es dabei einen eigenen, festen Pseudo-Kunden-Identifikator
 (`USSD_PSEUDO_CUSTOMER_ID = "USSD-Guthaben"`) statt der SMS-Absender-
-basierten ID (`"Kurzwahl-<reply_sender>"`) -- bewusst getrennt, damit ein
+basierten ID (`"Kurzwahl:<reply_sender>"`) -- bewusst getrennt, damit ein
 spaeterer Wechsel der Default-Methode nicht ploetzlich das offene Ticket
 des jeweils anderen Wegs uebernimmt.
 
@@ -409,7 +409,7 @@ Vollständige, kommentierte Referenz: `config.ini.example`. Kurzüberblick:
 
 | Sektion | Zweck |
 |---|---|
-| `[teltonika]` | Router-Zugang, TLS-Verhalten, Rufnummer-Region, Kurzwahl-Präfixe |
+| `[teltonika]` | Router-Zugang, TLS-Verhalten, Rufnummer-Region, Kurzwahl:Präfixe |
 | `[zammad]` | Zammad-Zugang, Gruppen für bekannte/unbekannte Absender, Telefonfeld |
 | `[ticket_to_sms]` | SMS-Teile-Limit, Überlauf-Verhalten, Sende-Budget, SQLite-Pfad |
 | `[balance]` | optional, USSD (Default) oder SMS, siehe [Guthaben-Überwachung](#guthaben-überwachung-optional) |
@@ -618,8 +618,8 @@ Identisch für USSD und SMS (gemeinsame Logik in `balance_ticket.py`):
   zur fehlenden Zustellbestätigung).
 
 Technischer Kniff dahinter: die Pseudo-Kunde/Ticket-Kontinuität nutzt
-für den SMS-Weg exakt dieselbe Infrastruktur wie normale Kurzwahl-
-Absender (`unresolved_sender_prefix`, z.B. `"Kurzwahl-80808"`), für den
+für den SMS-Weg exakt dieselbe Infrastruktur wie normale Kurzwahl:
+Absender (`unresolved_sender_prefix`, z.B. `"Kurzwahl:80808"`), für den
 USSD-Weg einen festen Identifikator (`"USSD-Guthaben"`, siehe
 [Warum balance_ticket.py](#warum-balance_ticketpy-als-eigenes-modul)) —
 dadurch entsteht bei "ok" automatisch ein neues Ticket beim nächsten Mal

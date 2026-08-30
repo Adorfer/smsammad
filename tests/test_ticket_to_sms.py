@@ -528,7 +528,7 @@ def test_budget_exceeded_respects_notify_cooldown():
 def test_unresolved_sender_prefix_gets_unwrapped_to_raw_short_number():
     zammad = FakeZammad(
         tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
-        users={7: {"id": 7, "mobile": "Kurzwahl-22543"}},
+        users={7: {"id": 7, "mobile": "Kurzwahl:22543"}},
         articles={1: [_public_call("Antwort")]},
     )
     teltonika = FakeTeltonika()
@@ -537,7 +537,7 @@ def test_unresolved_sender_prefix_gets_unwrapped_to_raw_short_number():
     ticket_to_sms.run(
         zammad,
         teltonika,
-        _config(unresolved_sender_prefix="Kurzwahl-"),
+        _config(unresolved_sender_prefix="Kurzwahl:"),
         dry_run=False,
         budget=budget,
     )
@@ -552,7 +552,7 @@ def test_unresolved_sender_prefix_unwraps_alphanumeric_sender_id():
     rausgehen."""
     zammad = FakeZammad(
         tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
-        users={7: {"id": 7, "mobile": "Kurzwahl-CALLYA"}},
+        users={7: {"id": 7, "mobile": "Kurzwahl:CALLYA"}},
         articles={1: [_public_call("Antwort")]},
     )
     teltonika = FakeTeltonika()
@@ -561,7 +561,7 @@ def test_unresolved_sender_prefix_unwraps_alphanumeric_sender_id():
     ticket_to_sms.run(
         zammad,
         teltonika,
-        _config(unresolved_sender_prefix="Kurzwahl-"),
+        _config(unresolved_sender_prefix="Kurzwahl:"),
         dry_run=False,
         budget=budget,
     )

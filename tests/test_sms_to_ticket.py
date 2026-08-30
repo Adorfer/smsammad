@@ -295,8 +295,8 @@ def test_resolve_sender_id_rejects_short_code_phonenumbers_would_accept():
     gueltige 6-stellige deutsche Rufnummer -- ohne '+49'/'01'-Praefix darf
     das nicht als echte Nummer durchgehen, sondern muss als Kurzwahl
     behandelt werden."""
-    sender_id, is_valid = _resolve_sender_id("224466", "DE", "0172", "Kurzwahl-")
-    assert (sender_id, is_valid) == ("Kurzwahl-224466", False)
+    sender_id, is_valid = _resolve_sender_id("224466", "DE", "0172", "Kurzwahl:")
+    assert (sender_id, is_valid) == ("Kurzwahl:224466", False)
 
 
 def test_resolve_sender_id_uses_prefix_when_direct_fails():
@@ -310,15 +310,15 @@ def test_resolve_sender_id_falls_back_to_raw_when_nothing_works():
 
 
 def test_resolve_sender_id_uses_unresolved_sender_prefix_when_configured():
-    sender_id, is_valid = _resolve_sender_id("22543", "DE", "0172", "Kurzwahl-")
-    assert (sender_id, is_valid) == ("Kurzwahl-22543", False)
+    sender_id, is_valid = _resolve_sender_id("22543", "DE", "0172", "Kurzwahl:")
+    assert (sender_id, is_valid) == ("Kurzwahl:22543", False)
 
 
 def test_resolve_sender_id_handles_alphanumeric_sender_id():
     """Alphanumerische Absender-IDs wie 'CALLYA' sind gar keine Ziffernfolge
-    -- muessen trotzdem sauber in 'Kurzwahl-CALLYA' resultieren."""
-    sender_id, is_valid = _resolve_sender_id("CALLYA", "DE", "0172", "Kurzwahl-")
-    assert (sender_id, is_valid) == ("Kurzwahl-CALLYA", False)
+    -- muessen trotzdem sauber in 'Kurzwahl:CALLYA' resultieren."""
+    sender_id, is_valid = _resolve_sender_id("CALLYA", "DE", "0172", "Kurzwahl:")
+    assert (sender_id, is_valid) == ("Kurzwahl:CALLYA", False)
 
 
 def test_short_code_sender_gets_prefixed_when_configured():
@@ -326,7 +326,7 @@ def test_short_code_sender_gets_prefixed_when_configured():
     zammad = FakeZammad()
 
     sms_to_ticket.run(
-        teltonika, zammad, _config(unresolved_sender_prefix="Kurzwahl-"), dry_run=False, budget=FakeBudget()
+        teltonika, zammad, _config(unresolved_sender_prefix="Kurzwahl:"), dry_run=False, budget=FakeBudget()
     )
 
     assert zammad.created_tickets == [

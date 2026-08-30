@@ -30,13 +30,13 @@ short_number_prefix = "0172"
 ; Praefix fuer Absender, die auch mit obigem Praefix nicht als gueltige
 ; Rufnummer erkannt werden -- Kurzwahlen wie "22543" (Netzbetreiber-
 ; Systemnachrichten) oder alphanumerische Absender-IDs wie "CALLYA". Wird
-; beim Empfang vor den rohen Absender-String gesetzt (z.B. "Kurzwahl-22543"
-; bzw. "Kurzwahl-CALLYA") und landet so lesbar in Zammads Telefonfeld
+; beim Empfang vor den rohen Absender-String gesetzt (z.B. "Kurzwahl:22543"
+; bzw. "Kurzwahl:CALLYA") und landet so lesbar in Zammads Telefonfeld
 ; (Buchstaben sind dort kein Problem); beim Versand wird der Praefix wieder
 ; entfernt und roh an den Absender gesendet -- ermoeglicht auch Antworten an
 ; Kurzwahlen/alphanumerische Absender. Leer lassen, um stattdessen den rohen
 ; Absender-String ohne Praefix zu speichern.
-unresolved_sender_prefix = "Kurzwahl-"
+unresolved_sender_prefix = "Kurzwahl:"
 
 [zammad]
 ; Basis-URL der Zammad-Instanz, ohne /api/v1

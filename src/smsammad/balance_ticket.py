@@ -22,7 +22,7 @@ TICKET_SUBJECT_ALARM = "SMS-Guthaben KRITISCH niedrig - SMS-Versand gefaehrdet"
 
 # Pseudo-Kunde fuer per USSD ermittelte Werte -- es gibt dabei keinen
 # SMS-Absender, daher ein fester Identifikator. Bewusst ein eigener Wert
-# (nicht "Kurzwahl-<reply_sender>" wie beim SMS-Weg), damit ein spaeterer
+# (nicht "Kurzwahl:<reply_sender>" wie beim SMS-Weg), damit ein spaeterer
 # Wechsel der Methode nicht ploetzlich das alte Ticket des jeweils anderen
 # Wegs wiederverwendet/uebernimmt.
 USSD_PSEUDO_CUSTOMER_ID = "USSD-Guthaben"
