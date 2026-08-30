@@ -7,7 +7,18 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "smsammad" / "config.ini"
+# Projekt-Wurzel = Verzeichnis, in dem auch run.py liegt (dieses File
+# liegt fest unter <Wurzel>/src/smsammad/config.py -- ueber die eigene
+# Dateiposition ermittelt statt ueber sys.argv[0]/cwd, damit es
+# unabhaengig davon funktioniert, wie/von wo aus run.py aufgerufen wird).
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Ohne --config wird config.ini direkt neben run.py gesucht (nicht in
+# ~/.config/...) -- bewusste Entscheidung: Sicherheitsimplikationen
+# (config.ini im Projektverzeichnis statt in einem dedizierten
+# Config-Verzeichnis) sind bekannt und akzeptiert, chmod 600 (aktiv
+# geprueft, siehe _check_permissions) muss hier ausreichen.
+DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "config.ini"
 DEFAULT_STATS_DB_FILE = Path.home() / ".local" / "state" / "smsammad" / "stats.db"
 
 

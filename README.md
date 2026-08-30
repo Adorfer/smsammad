@@ -463,6 +463,15 @@ sowohl vor als auch nach dem Subcommand (auch gemischt), z.B. sowohl
 `python3 run.py --dry-run sms-to-ticket` als auch
 `python3 run.py sms-to-ticket --dry-run`.
 
+Ohne `--config` wird `config.ini` **direkt neben `run.py`** gesucht
+(nicht in `~/.config/smsammad/`) -- unabhängig vom Arbeitsverzeichnis,
+über den tatsächlichen Installationsort des Pakets ermittelt. Bewusste
+Entscheidung: einfacher für ein einzeln deploytes Tool wie dieses (ein
+Blick ins Projektverzeichnis genügt), die Sicherheitsimplikationen
+(Zugangsdaten im Projektverzeichnis statt in einem dedizierten
+Config-Pfad) sind bekannt -- `chmod 600` (aktiv geprüft beim Start) muss
+hier ausreichen.
+
 ## Konfigurationsabschnitte
 
 Vollständige, kommentierte Referenz: `config.ini.example`. Kurzüberblick:

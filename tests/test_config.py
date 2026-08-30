@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from smsammad.config import ConfigError, load_config
+from smsammad.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
+import smsammad.config as config_module
 
 
 def _write_config(tmp_path: Path, content: str) -> Path:
@@ -389,3 +390,30 @@ def test_balance_config_rejects_regex_without_capture_group(tmp_path):
 
     with pytest.raises(ConfigError):
         load_config(config_path)
+
+
+def test_default_config_path_is_next_to_run_py():
+    """Ohne --config wird config.ini nicht in ~/.config/smsammad/
+    gesucht, sondern direkt neben run.py -- unabhaengig vom
+    Arbeitsverzeichnis, ueber die eigene Dateiposition von config.py
+    ermittelt (src/smsammad/config.py -> zwei Ebenen hoch)."""
+    project_root = Path(config_module.__file__).resolve().parents[2]
+
+    assert DEFAULT_CONFIG_PATH == project_root / "config.ini"
+    assert (project_root / "run.py").exists()
+
+
+def test_load_config_without_explicit_path_uses_default(monkeypatch, tmp_path):
+    fake_default = tmp_path / "config.ini"
+    fake_default.write_text(
+        CONFIG_TEMPLATE.format(
+            username='"u"', password='"p"', group='"Users"', new_customer_group='"Triage"'
+        ),
+        encoding="utf-8",
+    )
+    fake_default.chmod(0o600)
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", fake_default)
+
+    config = load_config(None)
+
+    assert config.teltonika.host == "192.168.1.1"
