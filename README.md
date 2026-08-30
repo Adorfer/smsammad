@@ -148,6 +148,21 @@ Live gegen ein echtes RUT240 verifiziert (siehe `teltonika.py`):
 - `sms_read`/`sms_total` sind nur gegen die Doku umgesetzt, nicht am
   echten Gerät verifiziert (werden von den aktuellen Abläufen nicht
   gebraucht) — falls sie mal gebraucht werden, zuerst live gegenprüfen.
+- **Schade**: `sms_send` bietet -- soweit in diesem Projekt genutzt/
+  erkundet -- keine Möglichkeit, einen längeren Text automatisch als
+  korrekt verkettete Mehrteil-SMS (GSM-Concatenated-SMS/UDH) zu
+  versenden; jeder Teil geht als eigenständige einzelne SMS raus.
+  Deshalb übernimmt `sms_split.py` das Aufteilen selbst und setzt
+  lesbare `"(1/3)"`-Präfixe vor jeden Teil, statt dass das Empfänger-
+  Handy die Teile automatisch zu einer Nachricht zusammenfügt (siehe
+  [SMS-Versand-Verhalten](#sms-versand-verhalten)). Ob eine vom Kunden
+  gesendete, im Mobilfunknetz korrekt verkettete Mehrteil-SMS beim
+  Empfang durch Router/Modem automatisch wieder zusammengesetzt würde,
+  ist in diesem Projekt **nicht verifiziert** (bislang kein solcher Fall
+  real beobachtet) -- wünschenswert wäre es so oder so: sowohl der eigene
+  Splitting-Code als auch die für den Kunden unübersichtliche Ankunft
+  mehrerer einzelner SMS-Nachrichten hintereinander wären damit
+  überflüssig.
 
 ### Credential-Sicherheit beim Teltonika-Zugriff
 
@@ -459,6 +474,37 @@ schicken, gehe so vor:
    gegenprüfen, ob z.B. Umlaute/Sonderzeichen korrekt angekommen sind oder
    der Text (je nach Konfiguration) gekürzt wurde, weil er zu lang war.
 
+## Für Zammad-Agenten: Neues Ticket oder bestehendes bei ankommender SMS?
+
+Wenn eine SMS eines Kunden ankommt, entscheidet SMSammad automatisch nach
+diesen Regeln:
+
+**Bestehendes Ticket bekommt einen neuen Artikel**, wenn der Kunde
+(anhand seiner Mobilnummer) bereits ein Zammad-Kundenkonto **und**
+mindestens ein **offenes** Ticket hat (Status nicht "geschlossen" oder
+"zusammengeführt"). Gibt es mehrere offene Tickets, wird das mit dem
+jüngsten Kundenkontakt gewählt.
+
+**Neues Ticket wird angelegt**, wenn der Absender entweder komplett neu
+ist (noch kein Zammad-Kundenkonto) **oder** zwar ein Kundenkonto hat,
+aber **kein offenes** Ticket (alle bisherigen sind geschlossen/
+zusammengeführt).
+
+**In welche Gruppe/Queue das neue Ticket kommt:**
+
+- **Komplett neuer Kunde** → Gruppe aus `[zammad] new_customer_group`
+  (die "unbekannt"/Triage-Queue).
+- **Bekannter Kunde ohne offenes Ticket** → Gruppe aus `[zammad] group`
+  -- **immer** diese eine feste Default-Gruppe, **unabhängig davon**, in
+  welcher Queue frühere (geschlossene) Tickets dieses Kunden lagen! Es
+  gibt aktuell **keine** Logik, die die Queue des zuletzt aktiven/
+  bearbeiteten Tickets wiederverwendet. Beispiel: War das letzte Ticket
+  eines Kunden in der Queue "Technik" und wurde geschlossen, landet die
+  nächste SMS desselben Kunden trotzdem in der allgemeinen
+  Default-Gruppe (`[zammad] group`), nicht automatisch wieder in
+  "Technik". Falls das fachlich nicht passt: bitte manuell in die
+  richtige Queue verschieben.
+
 ## Für Zammad-Admins: SMSammad-User einrichten
 
 SMSammad braucht einen eigenen Zammad-Benutzer mit API-Token-Zugriff
@@ -485,7 +531,9 @@ gespeichert worden.
 
 - **Aufteilung** (`sms_split.split_for_sms`): lange Texte werden an
   Wortgrenzen in Teile ≤150 Zeichen (inkl. `"(N/M) "`-Präfix ab dem
-  zweiten Teil) zerlegt.
+  zweiten Teil) zerlegt -- manuell, weil die Teltonika-API das nicht
+  automatisch als verkettete Mehrteil-SMS beherrscht, siehe
+  [Schade-Punkt oben](#teltonika-api-dokumentation-und-ihre-lücken).
 - **Überlauf** (`[ticket_to_sms] on_overflow`): mehr Teile als
   `max_sms_parts` → `reject` (nichts senden, Tag `sms-overflow`, Priorität
   hoch, Agent muss kürzen) oder `truncate` (erste `max_sms_parts` Teile
