@@ -136,6 +136,8 @@ def _process_one(
             f"'{sender_id}'" if config.teltonika.unresolved_sender_prefix else "Rohwert",
         )
 
+    message_text = html_to_text(message.text) or message.text
+
     if (
         config.balance is not None
         and config.balance.reply_sender
@@ -146,10 +148,31 @@ def _process_one(
         # konfiguriert sind (siehe balance_check.py), kann trotzdem eine
         # Abfrage-SMS unterwegs gewesen sein -- deren Antwort muss hier
         # genauso erkannt werden.
-        _process_balance_reply(message, sender_id, teltonika, zammad, config, dry_run, budget)
-        return
+        #
+        # ABER: dieselbe Kurzwahl (z.B. Vodafones "80808") verschickt auch
+        # voellig andere automatische Nachrichten (Vertragsaenderungen,
+        # Abbuchungshinweise usw.), keine Guthaben-Antworten. Live
+        # reproduziert: eine solche SMS liess den Betrags-Regex ins Leere
+        # laufen, was bisher die GESAMTE Verarbeitung crashen liess UND
+        # (weil vor teltonika.delete()) die SMS dauerhaft auf dem Router
+        # stehen liess -- jeder folgende Lauf crashte erneut. Deshalb nur
+        # dann als Guthaben-Antwort behandeln, wenn tatsaechlich ein Betrag
+        # erkennbar ist; sonst normal wie jede andere SMS weiterverarbeiten
+        # (faellt durch in den Code unten).
+        amount_eur = _parse_balance(message_text, config.balance.sms_balance_regex)
+        if amount_eur is not None:
+            _process_balance_reply(
+                message, sender_id, amount_eur, message_text, teltonika, zammad, config, dry_run, budget
+            )
+            return
+        logger.info(
+            "SMS #%s von '%s' (Guthaben-Absender) enthaelt keinen erkennbaren Betrag, wird "
+            "als normale SMS weiterverarbeitet: %r",
+            message.index,
+            message.sender,
+            redact_content(message_text),
+        )
 
-    message_text = html_to_text(message.text) or message.text
     body = message_text
     if message.timestamp:
         # Vom Router gemeldeter Zeitstempel (vermutlich Empfangszeit am
@@ -230,21 +253,18 @@ def _parse_balance(text: str, pattern: str) -> float | None:
 def _process_balance_reply(
     message,
     sender_id: str,
+    amount_eur: float,
+    message_text: str,
     teltonika: TeltonikaClient,
     zammad: ZammadClient,
     config: Config,
     dry_run: bool,
     budget: SmsBudget,
 ) -> None:
+    """`amount_eur`/`message_text` werden bereits von _process_one geliefert
+    (dort wird der Betrag VOR der Entscheidung "ist das ueberhaupt eine
+    Guthaben-Antwort" geprueft, siehe dort)."""
     assert config.balance is not None  # von _process_one bereits geprueft
-    message_text = html_to_text(message.text) or message.text
-
-    amount_eur = _parse_balance(message_text, config.balance.sms_balance_regex)
-    if amount_eur is None:
-        raise ValueError(
-            f"SMS #{message.index}: Guthaben-SMS von '{message.sender}' erhalten, aber Betrag "
-            f"nicht erkennbar: {message_text!r}"
-        )
 
     body = message_text
     if message.timestamp:

@@ -496,19 +496,25 @@ def test_balance_reply_on_existing_open_ticket_appends_and_updates_fields():
     assert zammad.priorities == [(9, 2)]
 
 
-def test_balance_reply_parse_failure_raises_and_does_not_delete():
+def test_balance_reply_parse_failure_falls_through_to_normal_ticket():
+    """Regression: die gleiche Kurzwahl (z.B. Vodafones '80808') verschickt
+    auch andere automatische Nachrichten (Vertragsaenderungen etc.), keine
+    Guthaben-Antworten. Fehlt ein erkennbarer Betrag, darf das NICHT
+    crashen (liess die SMS sonst dauerhaft auf dem Router stehen, jeder
+    folgende Lauf crashte erneut) -- stattdessen normale
+    Ticket-Erstellung wie bei jeder anderen SMS."""
     unparseable = "Hallo, aktuell keine Information zu Ihrem Vertrag verfuegbar."
     teltonika = FakeTeltonika([SmsMessage(index=1, sender="80808", text=unparseable)])
     zammad = FakeZammad()
     budget = FakeBudget()
 
-    with pytest.raises(RuntimeError):
-        sms_to_ticket.run(
-            teltonika, zammad, _config(balance=_balance_config()), dry_run=False, budget=budget
-        )
+    sms_to_ticket.run(
+        teltonika, zammad, _config(balance=_balance_config()), dry_run=False, budget=budget
+    )
 
-    assert teltonika.deleted == []
-    assert zammad.created_tickets == []
+    assert teltonika.deleted == [1]
+    assert zammad.created_tickets
+    assert zammad.created_tickets[0][2].startswith("Neues SMS-Ticket:")
     assert budget.balances == []
 
 
