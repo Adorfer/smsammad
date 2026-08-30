@@ -311,8 +311,10 @@ def _handle_overflow_reject(
 ) -> None:
     note = (
         f"SMS-Versand abgebrochen: Nachricht wuerde {part_count} SMS-Teile "
-        f"ergeben, erlaubt sind maximal {max_parts}. Bitte Text kuerzen und "
-        f"den Tag '{TAG_OUT}' erneut setzen, um den Versand auszuloesen."
+        f"ergeben, erlaubt sind maximal {max_parts}. Bitte eine neue, kuerzere "
+        f"Nachricht verfassen (bereits geschriebene Texte lassen sich nicht "
+        f"nachtraeglich aendern). Tag '{TAG_OUT}' ggf. neu setzen, falls der "
+        f"automatische Trigger dafuer nicht eingerichtet ist."
     )
     if dry_run:
         logger.info(
