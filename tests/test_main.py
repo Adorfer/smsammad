@@ -69,3 +69,37 @@ def test_dry_run_forces_notification_disabled(monkeypatch, tmp_path):
 
     assert len(sent) == 1
     assert sent[0].enabled is False
+
+
+@pytest.mark.parametrize(
+    "argv_tail",
+    [
+        # Flags VOR dem Subcommand (bisherige, einzig funktionierende Reihenfolge)
+        ["--config", "{config}", "--dry-run", "sms-to-ticket"],
+        # Flags NACH dem Subcommand (der eigentliche Fix)
+        ["sms-to-ticket", "--config", "{config}", "--dry-run"],
+        # gemischt
+        ["--config", "{config}", "sms-to-ticket", "--dry-run"],
+    ],
+    ids=["davor", "danach", "gemischt"],
+)
+def test_dry_run_flag_works_regardless_of_position(monkeypatch, tmp_path, argv_tail):
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(CONFIG_INI, encoding="utf-8")
+    config_path.chmod(0o600)
+
+    argv = ["smsammad"] + [
+        token.format(config=str(config_path)) for token in argv_tail
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    calls = []
+    monkeypatch.setattr(
+        main_module,
+        "_run_direction",
+        lambda name, config, dry_run: calls.append((name, dry_run)),
+    )
+
+    main()
+
+    assert calls == [("sms-to-ticket", True)]

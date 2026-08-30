@@ -457,9 +457,11 @@ python3 run.py stats --config config.ini
 ```
 
 `--dry-run` für einen Testlauf ohne Seiteneffekte (keine Zammad-/
-Router-Änderungen, keine Mails), `--verbose` für Debug-Logging. Globale
-Flags (`--config`, `--dry-run`, `--verbose`) müssen dem Subcommand
-**vorangehen** (argparse-Subparser-Eigenheit).
+Router-Änderungen, keine Mails), `--verbose` für Debug-Logging. Die
+globalen Flags (`--config`, `--dry-run`, `--verbose`) funktionieren
+sowohl vor als auch nach dem Subcommand (auch gemischt), z.B. sowohl
+`python3 run.py --dry-run sms-to-ticket` als auch
+`python3 run.py sms-to-ticket --dry-run`.
 
 ## Konfigurationsabschnitte
 

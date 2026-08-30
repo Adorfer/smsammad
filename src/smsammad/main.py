@@ -53,16 +53,42 @@ def _run_direction(name: str, config: Config, dry_run: bool) -> None:
         sms_to_ticket.run(teltonika, zammad, config, dry_run=dry_run)
 
 
+def _add_global_flags(target: argparse.ArgumentParser, *, suppress_defaults: bool) -> None:
+    """--config/--dry-run/--verbose sollen sowohl VOR als auch NACH dem
+    Subcommand funktionieren (z.B. sowohl 'smsammad --dry-run
+    sms-to-ticket' als auch 'smsammad sms-to-ticket --dry-run'). Dafuer
+    werden sie auf dem obersten Parser UND auf jedem Subparser definiert
+    (parents=[...] bei add_parser).
+
+    Stolperfalle dabei: parst der Subparser seinen Teil und eine Flag
+    wurde dort NICHT angegeben, setzt argparse fuer diese Flag sonst
+    trotzdem ihren Default -- und ueberschreibt damit den Wert, den der
+    oberste Parser ggf. schon aus dem Teil VOR dem Subcommand gesetzt
+    hat. Deshalb bekommen die Subparser-Kopien `default=SUPPRESS`: sie
+    setzen dann nur, was tatsaechlich NACH dem Subcommand stand, statt
+    den Wert von davor zu ueberschreiben."""
+    default_str = argparse.SUPPRESS if suppress_defaults else None
+    default_bool = argparse.SUPPRESS if suppress_defaults else False
+    target.add_argument("--config", type=str, default=default_str, help="Pfad zur config.ini")
+    target.add_argument(
+        "--dry-run", action="store_true", default=default_bool, help="keine Seiteneffekte, nur loggen"
+    )
+    target.add_argument(
+        "--verbose", action="store_true", default=default_bool, help="Debug-Logging"
+    )
+
+
 def main() -> None:
+    subcommand_flags = argparse.ArgumentParser(add_help=False)
+    _add_global_flags(subcommand_flags, suppress_defaults=True)
+
     parser = argparse.ArgumentParser(prog="smsammad")
-    parser.add_argument("--config", type=str, default=None, help="Pfad zur config.ini")
-    parser.add_argument("--dry-run", action="store_true", help="keine Seiteneffekte, nur loggen")
-    parser.add_argument("--verbose", action="store_true", help="Debug-Logging")
+    _add_global_flags(parser, suppress_defaults=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("ticket-to-sms")
-    subparsers.add_parser("sms-to-ticket")
-    subparsers.add_parser("stats")
-    subparsers.add_parser("balance-check")
+    subparsers.add_parser("ticket-to-sms", parents=[subcommand_flags])
+    subparsers.add_parser("sms-to-ticket", parents=[subcommand_flags])
+    subparsers.add_parser("stats", parents=[subcommand_flags])
+    subparsers.add_parser("balance-check", parents=[subcommand_flags])
 
     args = parser.parse_args()
     logger = setup_logging(args.verbose)
