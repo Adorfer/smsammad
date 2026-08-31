@@ -673,11 +673,39 @@ python3 run.py check-setup --fix    # gefundene Luecken reparieren
   Konfigurationsfehler (meist ein Tippfehler oder eine verschachtelte
   Zammad-Gruppe, deren vollständiger `Eltern::Kind`-Name nicht mit dem
   konfigurierten Kurznamen übereinstimmt, siehe Hinweis in
-  `config.ini.example`), den ein Mensch beheben muss.
+  `config.ini.example`), den ein Mensch beheben muss. Passt der
+  konfigurierte Name exakt zum letzten `::`-Segment einer verschachtelten
+  Gruppe, schlägt `check-setup` den vollen Namen als Korrektur vor (live
+  so gefunden: `new_customer_group = "Neanderfunk NIC"` in einer echten
+  `config.ini`, obwohl die Gruppe tatsächlich
+  `"Neanderfunk::Neanderfunk NIC"` heißt -- führte vorher zu HTTP 422 bei
+  jedem unbekannten SMS-Absender).
+- **Zusätzliche rein lesende Diagnose-Checks** (kein `--fix` dafür --
+  ein falscher Status/eine falsche Priorität/ein falscher Feldname ist
+  ein Tippfehler in der `config.ini`, den nur ein Mensch sinnvoll
+  korrigieren kann): `[zammad] open_state_id` und `[balance]
+  closed_state_id` (existiert die ID als Ticket-Status, UND hat sie
+  tatsächlich den semantisch passenden Typ "open"/"closed"?),
+  `[zammad] overflow_priority` (existiert als Ticket-Priorität?),
+  `phone_field`/`phone_field_fallback` (existieren als aktive Attribute
+  am Zammad-User-Objekt?).
 - **Sicheres Verhalten bei fehlenden Rechten**: jeder Check, der z.B. an
   HTTP 403 scheitert, wird als "nicht prüfbar" berichtet -- `--fix`
   versucht dann **nichts**, statt im Zweifel einen möglicherweise schon
   vorhandenen Trigger doppelt anzulegen.
+- **Ergebnis-Meldung und Exit-Code**: findet `check-setup` (außerhalb von
+  `--dry-run`) mindestens ein ungelöstes Problem, endet der Lauf mit
+  Exit-Code 1 und wirft eine Exception mit zwei Abschnitten -- "Änderungen
+  am Zammad-Setup durchgeführt" (nur bei `--fix`, falls tatsächlich etwas
+  repariert wurde) und "Was Du als Zammad-Admin evtl. ändern solltest"
+  (alles, was offen bleibt). Das nutzt denselben Mechanismus wie bei
+  `ticket-to-sms`/`sms-to-ticket`: `main.py` verschickt bei jeder
+  unbehandelten Exception ohnehin eine Fehlermail (siehe
+  `[notification]`) -- kein separater Mail-Pfad nötig. Sinnvoll für den
+  Cron-Betrieb: `check-setup` (ohne `--fix`, rein beobachtend) z.B.
+  täglich laufen lassen, um Config-Drift oder eine nachträglich in Zammad
+  geänderte Gruppen-/Trigger-Struktur automatisch per Mail gemeldet zu
+  bekommen, siehe [Cron-Betrieb](#cron-betrieb).
 
 ## SMS-Versand-Verhalten
 
@@ -986,7 +1014,21 @@ User-Feld:
 */5 * * * * /pfad/zu/smsammad/cron_run.sh ticket-to-sms
 0 7 * * *   /pfad/zu/smsammad/cron_run.sh balance-check
 0 8 * * 1   /pfad/zu/smsammad/cron_run.sh stats
+0 6 * * *   /pfad/zu/smsammad/cron_run.sh check-setup
 ```
+
+Die letzte Zeile ist **optional** (nur sinnvoll bei `[zammad]
+self_manage_setup = true`, siehe
+[check-setup](#optional-check-setup----die-schritte-oben-automatisch-prüfenreparieren))
+und **bewusst ohne `--fix`**: rein beobachtend, meldet Config-Drift oder
+eine nachträglich in Zammad geänderte Gruppen-/Trigger-Struktur per
+Fehlermail, verändert aber nichts automatisch im laufenden Betrieb --
+`--fix` bleibt eine bewusste, manuelle Aktion
+(`./cron_run.sh check-setup --fix` bzw. `python3 run.py check-setup
+--fix`). Wer das anders möchte, kann `--fix` natürlich auch in die
+Cron-Zeile aufnehmen (`cron_run.sh check-setup --fix` -- **wichtig**:
+`--fix` muss bei `cron_run.sh` wie bei `run.py` selbst NACH dem
+Subcommand stehen, `cron_run.sh` reicht Argumente entsprechend durch).
 
 `cron_run.sh` **niemals** manuell mit `sudo`/als root aufrufen (auch nicht
 zum Testen) — sonst gehören Log-/Lock-Dateien danach root, und der normale

@@ -50,7 +50,10 @@ if ! flock -n 200; then
     exit 0
 fi
 
-OUTPUT="$(cd "$PROJECT_DIR" && python3 run.py --config "$CONFIG" "$@" "$TASK" 2>&1)"
+# "$@" NACH "$TASK": Subcommand-eigene Flags wie check-setup's "--fix"
+# funktionieren nur NACH dem Subcommand (anders als --config/--dry-run/
+# --verbose, die bewusst in jeder Position funktionieren, siehe main.py).
+OUTPUT="$(cd "$PROJECT_DIR" && python3 run.py --config "$CONFIG" "$TASK" "$@" 2>&1)"
 EXIT_CODE=$?
 
 {

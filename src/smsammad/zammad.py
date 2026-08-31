@@ -339,6 +339,24 @@ class ZammadClient:
         sonst liefert Zammad HTTP 403."""
         return self._request("GET", "triggers") or []
 
+    def list_ticket_states(self) -> list[dict[str, Any]]:
+        """Fuer setup_check.py -- prueft open_state_id/closed_state_id
+        gegen echte, existierende Zammad-States (inkl. state_type_id, um
+        auch die SEMANTIK zu pruefen, nicht nur ob die ID existiert)."""
+        return self._request("GET", "ticket_states") or []
+
+    def list_ticket_priorities(self) -> list[dict[str, Any]]:
+        """Fuer setup_check.py -- prueft overflow_priority gegen echte,
+        existierende Zammad-Prioritaeten."""
+        return self._request("GET", "ticket_priorities") or []
+
+    def list_user_attributes(self) -> list[dict[str, Any]]:
+        """Fuer setup_check.py -- prueft phone_field/phone_field_fallback
+        gegen echte, existierende Attribute des User-Objekts (faengt einen
+        Tippfehler im Feldnamen frueh ab, statt erst zur Laufzeit an
+        unerwarteten leeren Werten zu scheitern)."""
+        return self._request("GET", "object_manager_attributes") or []
+
     def create_trigger(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Fuer setup_check.py -- legt den 'sms-out'-Trigger an. Erfordert
         eine Rolle mit Trigger-Verwaltungsrechten, sonst HTTP 403."""

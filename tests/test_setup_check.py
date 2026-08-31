@@ -2,6 +2,7 @@ import pytest
 
 from smsammad import setup_check
 from smsammad.config import (
+    BalanceConfig,
     Config,
     TeltonikaConfig,
     TicketToSmsConfig,
@@ -22,6 +23,22 @@ MATCHING_TRIGGER = {
     "perform": {"ticket.tags": {"operator": "add", "value": "sms-out"}},
 }
 
+# "Alles in Ordnung"-Defaults, passend zu _config() unten -- Tests, die
+# sich nur fuer Trigger ODER nur fuer Gruppen/Diagnose-Checks
+# interessieren, muessen den jeweils anderen Teil so nicht extra
+# mitschleppen, um nicht an unrelated "Problemen" zu scheitern.
+DEFAULT_GROUPS = [{"id": 5, "name": "Users"}, {"id": 6, "name": "Triage"}]
+DEFAULT_MY_USER = {"id": 6296, "group_ids": {"5": ["full"], "6": ["full"]}}
+DEFAULT_STATES = [
+    {"id": 2, "name": "open", "state_type_id": 2},
+    {"id": 4, "name": "closed", "state_type_id": 5},
+]
+DEFAULT_PRIORITIES = [{"id": 3, "name": "3 high"}]
+DEFAULT_USER_ATTRS = [
+    {"object": "User", "name": "mobile", "active": True},
+    {"object": "User", "name": "phone", "active": True},
+]
+
 
 class FakeZammad:
     def __init__(
@@ -29,16 +46,30 @@ class FakeZammad:
         triggers=None,
         groups=None,
         my_user=None,
+        states=None,
+        priorities=None,
+        user_attrs=None,
         raise_on_triggers=False,
         raise_on_my_user=False,
         raise_on_update=False,
+        raise_on_groups=False,
+        raise_on_states=False,
+        raise_on_priorities=False,
+        raise_on_user_attrs=False,
     ):
         self._triggers = triggers or []
-        self._groups = groups or []
-        self._my_user = my_user or {"id": 6296, "group_ids": {}}
+        self._groups = DEFAULT_GROUPS if groups is None else groups
+        self._my_user = DEFAULT_MY_USER if my_user is None else my_user
+        self._states = DEFAULT_STATES if states is None else states
+        self._priorities = DEFAULT_PRIORITIES if priorities is None else priorities
+        self._user_attrs = DEFAULT_USER_ATTRS if user_attrs is None else user_attrs
         self._raise_on_triggers = raise_on_triggers
         self._raise_on_my_user = raise_on_my_user
         self._raise_on_update = raise_on_update
+        self._raise_on_groups = raise_on_groups
+        self._raise_on_states = raise_on_states
+        self._raise_on_priorities = raise_on_priorities
+        self._raise_on_user_attrs = raise_on_user_attrs
         self.created_triggers = []
         self.updated_users = []
 
@@ -52,6 +83,8 @@ class FakeZammad:
         return {"id": 99, "name": payload["name"]}
 
     def list_groups(self):
+        if self._raise_on_groups:
+            raise ZammadError("GET groups -> HTTP 403: forbidden")
         return self._groups
 
     def get_my_user(self):
@@ -64,8 +97,32 @@ class FakeZammad:
             raise ZammadError(f"PUT users/{user_id} -> HTTP 403: forbidden")
         self.updated_users.append((user_id, fields))
 
+    def list_ticket_states(self):
+        if self._raise_on_states:
+            raise ZammadError("GET ticket_states -> HTTP 403: forbidden")
+        return self._states
 
-def _config(self_manage_setup=True, group="Users", new_customer_group="Triage"):
+    def list_ticket_priorities(self):
+        if self._raise_on_priorities:
+            raise ZammadError("GET ticket_priorities -> HTTP 403: forbidden")
+        return self._priorities
+
+    def list_user_attributes(self):
+        if self._raise_on_user_attrs:
+            raise ZammadError("GET object_manager_attributes -> HTTP 403: forbidden")
+        return self._user_attrs
+
+
+def _config(
+    self_manage_setup=True,
+    group="Users",
+    new_customer_group="Triage",
+    open_state_id=2,
+    overflow_priority=3,
+    phone_field="mobile",
+    phone_field_fallback="phone",
+    balance=None,
+):
     return Config(
         teltonika=TeltonikaConfig(
             host="h", username="u", password="p", default_country_code="DE"
@@ -75,8 +132,10 @@ def _config(self_manage_setup=True, group="Users", new_customer_group="Triage"):
             token="t",
             group=group,
             new_customer_group=new_customer_group,
-            phone_field="mobile",
-            overflow_priority=3,
+            phone_field=phone_field,
+            overflow_priority=overflow_priority,
+            phone_field_fallback=phone_field_fallback,
+            open_state_id=open_state_id,
             self_manage_setup=self_manage_setup,
         ),
         ticket_to_sms=TicketToSmsConfig(
@@ -87,7 +146,19 @@ def _config(self_manage_setup=True, group="Users", new_customer_group="Triage"):
             budget_notify_cooldown_minutes=60,
         ),
         notification=None,
+        balance=balance,
     )
+
+
+def _balance_config(closed_state_id=4):
+    return BalanceConfig(
+        warn_threshold_eur=5.0,
+        alarm_threshold_eur=1.0,
+        closed_state_id=closed_state_id,
+    )
+
+
+# --- self_manage_setup Schalter --------------------------------------------
 
 
 def test_disabled_by_default_does_nothing():
@@ -98,7 +169,10 @@ def test_disabled_by_default_does_nothing():
     assert zammad.updated_users == []
 
 
-def test_matching_trigger_found_no_create_attempted():
+# --- Trigger-Check -----------------------------------------------------------
+
+
+def test_all_ok_does_not_raise():
     zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
     setup_check.run(zammad, _config(), fix=True, dry_run=False)
 
@@ -108,6 +182,8 @@ def test_matching_trigger_found_no_create_attempted():
 def test_inactive_trigger_does_not_count():
     inactive = {**MATCHING_TRIGGER, "active": False}
     zammad = FakeZammad(triggers=[inactive])
+    # Trigger fehlt, wird per --fix erfolgreich angelegt -> kein
+    # verbleibendes Problem, kein raise (alles andere ist per Default ok).
     setup_check.run(zammad, _config(), fix=True, dry_run=False)
 
     assert len(zammad.created_triggers) == 1
@@ -135,15 +211,19 @@ def test_trigger_with_remove_operator_does_not_count():
     assert len(zammad.created_triggers) == 1
 
 
-def test_missing_trigger_without_fix_does_not_create():
+def test_missing_trigger_without_fix_reports_problem_and_does_not_create():
     zammad = FakeZammad(triggers=[])
-    setup_check.run(zammad, _config(), fix=False, dry_run=False)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=False, dry_run=False)
 
     assert zammad.created_triggers == []
 
 
-def test_missing_trigger_with_fix_creates_it():
+def test_missing_trigger_with_fix_creates_it_and_no_longer_raises():
     zammad = FakeZammad(triggers=[])
+    # Fix behebt das einzige Problem (kein Guthaben-Abschnitt konfiguriert,
+    # alles andere per Default "in Ordnung") -> kein verbleibendes Problem,
+    # also KEIN raise.
     setup_check.run(zammad, _config(), fix=True, dry_run=False)
 
     assert len(zammad.created_triggers) == 1
@@ -152,35 +232,36 @@ def test_missing_trigger_with_fix_creates_it():
     assert payload["perform"]["ticket.tags"] == {"operator": "add", "value": "sms-out"}
 
 
-def test_missing_trigger_with_fix_and_dry_run_does_not_create():
+def test_missing_trigger_with_fix_and_dry_run_does_not_create_or_raise():
     zammad = FakeZammad(triggers=[])
+    # dry_run: nie ein raise, auch wenn Probleme (noch) offen sind.
     setup_check.run(zammad, _config(), fix=True, dry_run=True)
 
     assert zammad.created_triggers == []
 
 
-def test_trigger_permission_error_does_not_crash():
+def test_trigger_permission_error_is_reported_and_not_double_created():
     zammad = FakeZammad(raise_on_triggers=True)
-    setup_check.run(zammad, _config(), fix=True, dry_run=False)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
 
     assert zammad.created_triggers == []
 
 
+# --- Gruppenzugriff-Check ------------------------------------------------
+
+
 def test_group_access_already_full_no_update():
-    zammad = FakeZammad(
-        triggers=[MATCHING_TRIGGER],
-        groups=[{"id": 5, "name": "Users"}, {"id": 6, "name": "Triage"}],
-        my_user={"id": 6296, "group_ids": {"5": ["full"], "6": ["full"]}},
-    )
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
     setup_check.run(zammad, _config(), fix=True, dry_run=False)
 
     assert zammad.updated_users == []
 
 
-def test_group_access_missing_with_fix_grants_full_access():
+def test_group_access_missing_with_fix_grants_full_access_and_no_longer_raises():
     zammad = FakeZammad(
         triggers=[MATCHING_TRIGGER],
-        groups=[{"id": 5, "name": "Users"}, {"id": 6, "name": "Triage"}],
+        groups=DEFAULT_GROUPS,
         my_user={"id": 6296, "group_ids": {}},
     )
     setup_check.run(zammad, _config(), fix=True, dry_run=False)
@@ -191,21 +272,22 @@ def test_group_access_missing_with_fix_grants_full_access():
     assert fields["group_ids"]["5"] == ["full"]
 
 
-def test_group_access_missing_without_fix_does_not_grant():
+def test_group_access_missing_without_fix_reports_problem():
     zammad = FakeZammad(
         triggers=[MATCHING_TRIGGER],
-        groups=[{"id": 5, "name": "Users"}, {"id": 6, "name": "Triage"}],
+        groups=DEFAULT_GROUPS,
         my_user={"id": 6296, "group_ids": {}},
     )
-    setup_check.run(zammad, _config(), fix=False, dry_run=False)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=False, dry_run=False)
 
     assert zammad.updated_users == []
 
 
-def test_group_access_missing_with_fix_and_dry_run_does_not_grant():
+def test_group_access_missing_with_fix_and_dry_run_does_not_grant_or_raise():
     zammad = FakeZammad(
         triggers=[MATCHING_TRIGGER],
-        groups=[{"id": 5, "name": "Users"}, {"id": 6, "name": "Triage"}],
+        groups=DEFAULT_GROUPS,
         my_user={"id": 6296, "group_ids": {}},
     )
     setup_check.run(zammad, _config(), fix=True, dry_run=True)
@@ -214,9 +296,30 @@ def test_group_access_missing_with_fix_and_dry_run_does_not_grant():
 
 
 def test_nonexistent_group_is_not_created():
-    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], groups=[], my_user={"id": 6296, "group_ids": {}})
-    setup_check.run(zammad, _config(), fix=True, dry_run=False)
+    zammad = FakeZammad(
+        triggers=[MATCHING_TRIGGER], groups=[], my_user={"id": 6296, "group_ids": {}}
+    )
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
 
+    assert zammad.updated_users == []
+
+
+def test_nonexistent_nested_group_suggests_full_path(caplog):
+    zammad = FakeZammad(
+        triggers=[MATCHING_TRIGGER],
+        groups=[{"id": 14, "name": "Neanderfunk::Neanderfunk NIC"}],
+        my_user={"id": 6296, "group_ids": {}},
+    )
+    with caplog.at_level("WARNING"), pytest.raises(RuntimeError):
+        setup_check.run(
+            zammad,
+            _config(group="Neanderfunk NIC", new_customer_group="Neanderfunk NIC"),
+            fix=True,
+            dry_run=False,
+        )
+
+    assert "Neanderfunk::Neanderfunk NIC" in caplog.text
     assert zammad.updated_users == []
 
 
@@ -233,23 +336,146 @@ def test_same_group_and_new_customer_group_checked_only_once():
     assert len(zammad.updated_users) == 1
 
 
-def test_group_permission_error_does_not_crash():
-    zammad = FakeZammad(
-        triggers=[MATCHING_TRIGGER],
-        groups=[{"id": 5, "name": "Users"}],
-        raise_on_my_user=True,
-    )
-    setup_check.run(zammad, _config(), fix=True, dry_run=False)
+def test_group_list_permission_error_is_reported():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], raise_on_groups=True)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
 
     assert zammad.updated_users == []
 
 
-def test_grant_permission_error_does_not_crash():
+def test_group_my_user_permission_error_is_reported():
+    zammad = FakeZammad(
+        triggers=[MATCHING_TRIGGER], groups=DEFAULT_GROUPS, raise_on_my_user=True
+    )
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+    assert zammad.updated_users == []
+
+
+def test_grant_permission_error_is_reported_not_swallowed():
     zammad = FakeZammad(
         triggers=[MATCHING_TRIGGER],
-        groups=[{"id": 5, "name": "Users"}],
+        groups=DEFAULT_GROUPS,
         my_user={"id": 6296, "group_ids": {}},
         raise_on_update=True,
     )
-    # Sollte weder crashen noch eine Exception nach aussen durchlassen.
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+# --- Diagnose-Checks (rein lesend, kein --fix) --------------------------
+
+
+def test_wrong_open_state_id_reports_problem():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_check.run(zammad, _config(open_state_id=4), fix=True, dry_run=False)
+
+    assert "open_state_id" in str(exc_info.value)
+
+
+def test_open_state_id_pointing_at_closed_state_reports_problem():
+    """id=4 existiert (siehe DEFAULT_STATES), ist aber semantisch 'closed'
+    -- open_state_id darauf zu setzen waere ein Konfigurationsfehler."""
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_check.run(zammad, _config(open_state_id=4), fix=True, dry_run=False)
+
+    assert "semantisch" in str(exc_info.value) or "open_state_id" in str(exc_info.value)
+
+
+def test_nonexistent_open_state_id_reports_problem():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(open_state_id=999), fix=True, dry_run=False)
+
+
+def test_closed_state_id_only_checked_when_balance_configured():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
+    # Kein balance= gesetzt -> closed_state_id wird gar nicht geprueft.
     setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_wrong_closed_state_id_reports_problem_when_balance_configured():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_check.run(
+            zammad,
+            _config(balance=_balance_config(closed_state_id=999)),
+            fix=True,
+            dry_run=False,
+        )
+
+    assert "closed_state_id" in str(exc_info.value)
+
+
+def test_correct_closed_state_id_does_not_raise():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
+    setup_check.run(
+        zammad, _config(balance=_balance_config(closed_state_id=4)), fix=True, dry_run=False
+    )
+
+
+def test_nonexistent_overflow_priority_reports_problem():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_check.run(zammad, _config(overflow_priority=999), fix=True, dry_run=False)
+
+    assert "overflow_priority" in str(exc_info.value)
+
+
+def test_nonexistent_phone_field_reports_problem():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_check.run(zammad, _config(phone_field="handynummer"), fix=True, dry_run=False)
+
+    assert "phone_field" in str(exc_info.value)
+
+
+def test_inactive_phone_field_reports_problem():
+    zammad = FakeZammad(
+        triggers=[MATCHING_TRIGGER],
+        user_attrs=[{"object": "User", "name": "mobile", "active": False}],
+    )
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_nonexistent_phone_field_fallback_reports_problem():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER])
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_check.run(
+            zammad, _config(phone_field_fallback="festnetz"), fix=True, dry_run=False
+        )
+
+    assert "phone_field_fallback" in str(exc_info.value)
+
+
+def test_states_permission_error_reports_problem():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], raise_on_states=True)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_priorities_permission_error_reports_problem():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], raise_on_priorities=True)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_user_attrs_permission_error_reports_problem():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], raise_on_user_attrs=True)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_diagnose_checks_never_raise_in_dry_run():
+    zammad = FakeZammad(
+        triggers=[MATCHING_TRIGGER],
+        raise_on_states=True,
+        raise_on_priorities=True,
+        raise_on_user_attrs=True,
+    )
+    setup_check.run(zammad, _config(open_state_id=999), fix=True, dry_run=True)
