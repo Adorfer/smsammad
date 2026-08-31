@@ -56,6 +56,7 @@ _USSD_MOJIBAKE_PATTERNS = [
     (re.compile(r"Zur\?.ck"), "Zurück"),
     (re.compile(r"F\?.r"), "Für"),
     (re.compile(r"Hauptmen\?."), "Hauptmenü"),
+    (re.compile(r"M\?.chtest"), "Möchtest"),
 ]
 
 
