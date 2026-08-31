@@ -96,6 +96,17 @@ class ZammadConfig:
     # kundenzentrisch arbeitende Teams ("one face to the customer"), bei
     # denen granulare Einordnung ueber Tags statt Queues laeuft.
     group_from_last_ticket: bool = False
+    # Schalter fuer den Subcommand 'check-setup' (siehe README): PRUEFEN
+    # (Trigger 'sms-out' vorhanden? Gruppenzugriff auf group/
+    # new_customer_group vorhanden?) findet nur statt, wenn dieser Schalter
+    # True ist -- Default False, bewusst absichtlich, damit dieses Feature
+    # nur nutzt, wer es aktiv einschaltet (erfordert einen API-Token mit
+    # erweiterten Rechten). Zusaetzlich noetig fuer tatsaechliche
+    # AENDERUNGEN (Trigger anlegen/Gruppenzugriff gewaehren): der
+    # eigenstaendige --fix-Flag beim Aufruf. Laesst sich jederzeit per
+    # config.ini wieder hart abschalten, falls sich z.B. Zammads
+    # Trigger-/Berechtigungs-API in einem Update aendert.
+    self_manage_setup: bool = False
 
 
 @dataclass
@@ -315,6 +326,7 @@ def load_config(path: Path | None = None) -> Config:
             group_from_last_ticket=_get_bool(
                 parser, "zammad", "group_from_last_ticket", fallback=False
             ),
+            self_manage_setup=_get_bool(parser, "zammad", "self_manage_setup", fallback=False),
         )
         stats_db_file_raw = _get(
             parser, "ticket_to_sms", "stats_db_file", fallback=str(DEFAULT_STATS_DB_FILE)

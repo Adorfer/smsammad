@@ -66,10 +66,17 @@ url = "https://zammad.example.local"
 token = "CHANGEME"
 ; Gruppe fuer neue Tickets von bereits bekannten Kunden OHNE offenes Ticket
 ; -- Default/Fallback, falls group_from_last_ticket unten deaktiviert ist
-; oder der Kunde noch gar kein Ticket hatte.
+; oder der Kunde noch gar kein Ticket hatte. WICHTIG bei verschachtelten
+; Zammad-Gruppen (Untergruppen): der EXAKTE, VOLLE Name mit "::"-Trenner
+; wird gebraucht (z.B. "Elterngruppe::Kindgruppe"), nicht nur der
+; sichtbare Kurzname -- live einen 422-Fehler "No lookup value found for
+; 'group'" verursacht, weil der Kurzname allein nicht matcht. Echte Namen
+; pruefen: 'GET /api/v1/groups' (oder [zammad] self_manage_setup=true +
+; 'check-setup' Subcommand, siehe README, prueft das automatisch mit).
 group = "Users"
 ; Gruppe fuer neue Tickets von SMS-Absendern ohne bestehenden Zammad-Kunden
-; (eigene Triage-Queue zur manuellen Sichtung)
+; (eigene Triage-Queue zur manuellen Sichtung) -- gleicher Hinweis zu
+; verschachtelten Gruppennamen wie bei `group` oben.
 new_customer_group = "SMS-Eingang-Unbekannt"
 ; false (Default): neues Ticket eines bekannten Kunden ohne offenes Ticket
 ; landet immer in der festen Gruppe `group` oben.
@@ -93,6 +100,15 @@ overflow_priority = 3
 ; wenn ein Ticket mit 'sms-cannotsend' markiert wird und aktuell nicht
 ; bereits offen ist (z.B. geschlossen oder "Warten auf Rueckmeldung")
 open_state_id = 2
+; Schalter fuer den Subcommand 'check-setup' (siehe README): prueft (und
+; mit --fix repariert) den Trigger 'sms-out' und den eigenen Gruppen-
+; zugriff auf group/new_customer_group oben. HART ABGESCHALTET per
+; Default (false) -- dieses Feature braucht einen API-Token mit
+; erweiterten Rechten (Trigger-Verwaltung, Nutzerverwaltung), die nicht
+; jede Installation vergeben moechte. Kann jederzeit wieder auf false
+; gesetzt werden, um das Feature komplett zu deaktivieren (z.B. falls
+; sich Zammads Trigger-/Berechtigungs-API in einem Update aendert).
+self_manage_setup = false
 
 [ticket_to_sms]
 ; "multipart" (Default): der GESAMTE Text geht in EINEM Request an den

@@ -97,7 +97,7 @@ def test_dry_run_flag_works_regardless_of_position(monkeypatch, tmp_path, argv_t
     monkeypatch.setattr(
         main_module,
         "_run_direction",
-        lambda name, config, dry_run: calls.append((name, dry_run)),
+        lambda name, config, dry_run, fix=False: calls.append((name, dry_run)),
     )
 
     main()

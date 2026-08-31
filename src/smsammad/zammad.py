@@ -316,3 +316,30 @@ class ZammadClient:
             result = self._request("GET", f"groups/{group_id}") or {}
             self._group_name_cache[group_id] = result.get("name", str(group_id))
         return self._group_name_cache[group_id]
+
+    def list_groups(self) -> list[dict[str, Any]]:
+        """Fuer setup_check.py -- Gruppen-Name -> ID aufloesen (Config
+        speichert Namen, die Berechtigungs-API braucht IDs)."""
+        return self._request("GET", "groups") or []
+
+    def get_my_user(self) -> dict[str, Any]:
+        """Fuer setup_check.py -- eigene User-ID/Rollen/Gruppenzugriffe."""
+        return self._request("GET", "users/me")
+
+    def update_user(self, user_id: int, **fields: Any) -> None:
+        """Fuer setup_check.py -- eigenen Gruppenzugriff erweitern
+        (group_ids). Nur wirksam, wenn der API-User selbst Admin-Rechte
+        hat, sonst liefert Zammad HTTP 403."""
+        self._request("PUT", f"users/{user_id}", json=fields)
+
+    def list_triggers(self) -> list[dict[str, Any]]:
+        """Fuer setup_check.py -- prueft, ob ein Trigger existiert, der bei
+        oeffentlichen Anruf-Artikeln vom Agenten den Tag 'sms-out' setzt.
+        Erfordert eine Rolle mit Trigger-Verwaltungsrechten (z.B. Admin),
+        sonst liefert Zammad HTTP 403."""
+        return self._request("GET", "triggers") or []
+
+    def create_trigger(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Fuer setup_check.py -- legt den 'sms-out'-Trigger an. Erfordert
+        eine Rolle mit Trigger-Verwaltungsrechten, sonst HTTP 403."""
+        return self._request("POST", "triggers", json=payload)

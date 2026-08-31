@@ -501,6 +501,7 @@ python3 run.py ticket-to-sms --config config.ini
 python3 run.py sms-to-ticket --config config.ini
 python3 run.py balance-check --config config.ini
 python3 run.py stats --config config.ini
+python3 run.py check-setup --config config.ini   # optional, siehe unten
 ```
 
 `--dry-run` für einen Testlauf ohne Seiteneffekte (keine Zammad-/
@@ -630,6 +631,53 @@ Auswahl erstmal nur lokal ins Formular ein. Erst ein Klick auf
 **"Übermitteln"** unten rechts speichert die Änderung tatsächlich. Wird
 das vergessen, wirkt die Berechtigung im UI gesetzt, ist aber nie
 gespeichert worden.
+
+### Optional: `check-setup` -- die Schritte oben automatisch prüfen/reparieren
+
+Statt Trigger und Gruppenzugriff von Hand einzurichten (und bei
+Config-Änderungen von Hand nachzupflegen), kann SMSammad das selbst
+prüfen und -- mit einem API-Token mit erweiterten Rechten -- auch
+reparieren:
+
+```bash
+python3 run.py check-setup          # nur pruefen, nichts aendern
+python3 run.py check-setup --fix    # gefundene Luecken reparieren
+```
+
+- **Hart abgeschaltet per Default**: wirkt nur, wenn `[zammad]
+  self_manage_setup = true` in der `config.ini` gesetzt ist -- bewusst
+  opt-in, weil dieses Feature einen Token mit **Trigger-Verwaltungs-
+  und Nutzerverwaltungsrechten** braucht (i.d.R. Admin-Rolle), die nicht
+  jede Installation vergeben möchte. Auf `false` zurücksetzen schaltet
+  das Feature sofort wieder komplett ab -- z.B. falls Zammads Trigger-/
+  Berechtigungs-API sich in einem Update ändert und dieser Code dagegen
+  bricht.
+- **`--fix` ist ein zweiter, unabhängiger Schalter**: ohne `--fix` wird
+  nur geprüft und berichtet (auch bei `self_manage_setup = true`), egal
+  welche Rechte der Token hat -- nichts wird verändert. Erst `--fix`
+  löst tatsächliche Schreibaktionen aus (siehe unten). `--dry-run` wirkt
+  wie überall: zeigt nur, was `--fix` tun würde, ohne es zu tun.
+- **Trigger-Check**: sucht einen aktiven Trigger, der bei einem
+  öffentlichen Anruf-Artikel vom Agenten den Tag `sms-out` setzt (Name
+  frei wählbar, geprüft wird die Bedingung/Aktion selbst). Fehlt er und
+  `--fix` ist gesetzt, wird er mit genau der oben beschriebenen
+  Bedingung neu angelegt.
+- **Gruppenzugriff-Check**: prüft, ob der eigene API-User vollen Zugriff
+  auf `[zammad] group` und `new_customer_group` hat. Fehlt er und
+  `--fix` ist gesetzt, wird er gewährt (`PUT /users/<eigene id>`,
+  `group_ids`) -- funktioniert nur, wenn der Token selbst
+  Nutzerverwaltungsrechte hat, sonst meldet Zammad HTTP 403 und
+  `check-setup` berichtet das als Fehler, statt abzustürzen.
+- **Nie automatisiert**: neue Gruppen anlegen, falls `group`/
+  `new_customer_group` gar nicht existieren -- das ist ein
+  Konfigurationsfehler (meist ein Tippfehler oder eine verschachtelte
+  Zammad-Gruppe, deren vollständiger `Eltern::Kind`-Name nicht mit dem
+  konfigurierten Kurznamen übereinstimmt, siehe Hinweis in
+  `config.ini.example`), den ein Mensch beheben muss.
+- **Sicheres Verhalten bei fehlenden Rechten**: jeder Check, der z.B. an
+  HTTP 403 scheitert, wird als "nicht prüfbar" berichtet -- `--fix`
+  versucht dann **nichts**, statt im Zweifel einen möglicherweise schon
+  vorhandenen Trigger doppelt anzulegen.
 
 ## SMS-Versand-Verhalten
 

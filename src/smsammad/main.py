@@ -1,6 +1,6 @@
 """CLI-Einstieg fuer smsammad.
 
-Vier Subcommands:
+Subcommands:
 - ticket-to-sms: Zammad-Ticket mit Tag 'sms-out' -> SMS ueber Teltonika-Router
   (Cronjob-Polling)
 - sms-to-ticket: eingehende SMS am Teltonika-Router -> Zammad-Ticket
@@ -10,6 +10,9 @@ Vier Subcommands:
 - balance-check: taegliche Guthaben-Abfrage der Prepaid-SIM-Karte
   (Cronjob, 1x/Tag) -- per USSD (synchron) oder SMS (Antwort wird von
   sms-to-ticket verarbeitet), siehe [balance] method in der config.ini
+- check-setup: prueft (und mit --fix repariert) die Zammad-seitige
+  Installation (Trigger, Gruppenzugriff) -- nur aktiv, wenn [zammad]
+  self_manage_setup=true in der config.ini gesetzt ist, siehe setup_check.py
 """
 
 import argparse
@@ -18,7 +21,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import balance_check, sms_to_ticket, stats_report, ticket_to_sms
+from . import balance_check, setup_check, sms_to_ticket, stats_report, ticket_to_sms
 from .config import Config, ConfigError, load_config
 from .logging_setup import setup_logging
 from .notify import send_mail
@@ -27,7 +30,7 @@ from .teltonika import TeltonikaClient
 from .zammad import ZammadClient
 
 
-def _run_direction(name: str, config: Config, dry_run: bool) -> None:
+def _run_direction(name: str, config: Config, dry_run: bool, fix: bool = False) -> None:
     if name == "stats":
         # Rein lokale Auswertung + Mail, keine Zammad-/Teltonika-Zugriffe noetig.
         budget = SmsBudget(
@@ -45,6 +48,10 @@ def _run_direction(name: str, config: Config, dry_run: bool) -> None:
         # Zammad-Client wird fuer die USSD-Methode gebraucht (synchrones
         # Ticket-Handling im selben Lauf, siehe balance_ticket.py).
         balance_check.run(teltonika, zammad, config, dry_run=dry_run)
+        return
+
+    if name == "check-setup":
+        setup_check.run(zammad, config, fix=fix, dry_run=dry_run)
         return
 
     if name == "ticket-to-sms":
@@ -89,6 +96,17 @@ def main() -> None:
     subparsers.add_parser("sms-to-ticket", parents=[subcommand_flags])
     subparsers.add_parser("stats", parents=[subcommand_flags])
     subparsers.add_parser("balance-check", parents=[subcommand_flags])
+    check_setup_parser = subparsers.add_parser("check-setup", parents=[subcommand_flags])
+    check_setup_parser.add_argument(
+        "--fix",
+        action="store_true",
+        default=False,
+        help=(
+            "gefundene Luecken tatsaechlich reparieren (Trigger anlegen, Gruppenzugriff "
+            "gewaehren) statt nur zu berichten -- erfordert zusaetzlich "
+            "[zammad] self_manage_setup=true in der config.ini"
+        ),
+    )
 
     args = parser.parse_args()
     logger = setup_logging(args.verbose)
@@ -106,7 +124,7 @@ def main() -> None:
         )
 
     try:
-        _run_direction(args.command, config, args.dry_run)
+        _run_direction(args.command, config, args.dry_run, fix=getattr(args, "fix", False))
     except Exception as exc:
         logger.exception("%s fehlgeschlagen", args.command)
         try:
