@@ -30,6 +30,17 @@ from .zammad import ZammadClient, ZammadError
 
 logger = logging.getLogger("smsammad")
 
+
+class SetupProblem(RuntimeError):
+    """Ausgeloest von run(), wenn nach allen Checks (und ggf. --fix)
+    mindestens ein Problem offen bleibt. Eigene Klasse (statt einfach
+    RuntimeError), damit main.py das als "hier ist ein bereits fertig
+    formatierter Diagnosebericht, keine unerwartete Ausnahme" erkennen
+    und OHNE Python-Traceback in Log/Mail behandeln kann -- die Meldung
+    selbst ist bereits vollstaendig und lesbar, ein Traceback obendrauf
+    waere nur Rauschen."""
+
+
 TRIGGER_TAG = "sms-out"
 
 _ARTICLE_TYPE_PHONE_ID = "5"
@@ -353,4 +364,4 @@ def run(zammad: ZammadClient, config: Config, fix: bool, dry_run: bool) -> None:
             "Was Du als Zammad-Admin evtl. ändern solltest:\n"
             + "\n".join(f"- {p}" for p in problems)
         )
-        raise RuntimeError("\n\n".join(sections))
+        raise SetupProblem("\n\n".join(sections))

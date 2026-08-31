@@ -125,6 +125,21 @@ def main() -> None:
 
     try:
         _run_direction(args.command, config, args.dry_run, fix=getattr(args, "fix", False))
+    except setup_check.SetupProblem as exc:
+        # Kein Traceback: die Meldung ist bereits ein vollstaendiger,
+        # lesbarer Diagnosebericht (siehe setup_check.py), kein
+        # unerwarteter Absturz -- ein Traceback obendrauf waere nur
+        # Rauschen in Log und Mail.
+        logger.error("%s", exc)
+        try:
+            send_mail(
+                config.notification,
+                subject="SMSammad: check-setup hat Probleme gefunden",
+                body=str(exc),
+            )
+        except Exception:
+            logger.exception("Fehlerbenachrichtigung per Mail konnte nicht verschickt werden")
+        sys.exit(1)
     except Exception as exc:
         logger.exception("%s fehlgeschlagen", args.command)
         try:

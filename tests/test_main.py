@@ -4,6 +4,7 @@ import pytest
 
 import smsammad.main as main_module
 from smsammad.main import main
+from smsammad.setup_check import SetupProblem
 
 CONFIG_INI = """
 [teltonika]
@@ -69,6 +70,74 @@ def test_dry_run_forces_notification_disabled(monkeypatch, tmp_path):
 
     assert len(sent) == 1
     assert sent[0].enabled is False
+
+
+def test_setup_problem_is_reported_without_traceback(monkeypatch, tmp_path, caplog):
+    """SetupProblem ist ein bereits fertig formatierter Diagnosebericht
+    (siehe setup_check.py), kein unerwarteter Absturz -- Log und Mail
+    duerfen deshalb KEINEN Python-Traceback enthalten, nur die Meldung
+    selbst."""
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(CONFIG_INI, encoding="utf-8")
+    config_path.chmod(0o600)
+
+    monkeypatch.setattr(sys, "argv", ["smsammad", "--config", str(config_path), "check-setup"])
+
+    message = "Was Du als Zammad-Admin evtl. ändern solltest:\n- phone_field: nicht pruefbar"
+
+    def boom(*args, **kwargs):
+        raise SetupProblem(message)
+
+    monkeypatch.setattr(main_module, "_run_direction", boom)
+
+    sent = []
+    monkeypatch.setattr(
+        main_module,
+        "send_mail",
+        lambda config, subject, body: sent.append((subject, body)),
+    )
+
+    with caplog.at_level("ERROR"), pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 1
+    assert "Traceback" not in caplog.text
+    assert message in caplog.text
+
+    assert len(sent) == 1
+    subject, body = sent[0]
+    assert "check-setup" in subject
+    assert body == message
+    assert "Traceback" not in body
+
+
+def test_other_exceptions_still_include_traceback(monkeypatch, tmp_path, caplog):
+    """Gegenprobe: eine ECHTE unerwartete Exception (kein SetupProblem)
+    muss weiterhin mit vollem Traceback geloggt/gemailt werden."""
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(CONFIG_INI, encoding="utf-8")
+    config_path.chmod(0o600)
+
+    monkeypatch.setattr(sys, "argv", ["smsammad", "--config", str(config_path), "sms-to-ticket"])
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("echter unerwarteter Fehler")
+
+    monkeypatch.setattr(main_module, "_run_direction", boom)
+
+    sent = []
+    monkeypatch.setattr(
+        main_module,
+        "send_mail",
+        lambda config, subject, body: sent.append((subject, body)),
+    )
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert len(sent) == 1
+    _, body = sent[0]
+    assert "Traceback" in body
 
 
 @pytest.mark.parametrize(

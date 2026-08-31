@@ -701,7 +701,16 @@ python3 run.py check-setup --fix    # gefundene Luecken reparieren
   (alles, was offen bleibt). Das nutzt denselben Mechanismus wie bei
   `ticket-to-sms`/`sms-to-ticket`: `main.py` verschickt bei jeder
   unbehandelten Exception ohnehin eine Fehlermail (siehe
-  `[notification]`) -- kein separater Mail-Pfad nötig. Sinnvoll für den
+  `[notification]`) -- kein separater Mail-Pfad nötig. Intern eine eigene
+  Exception-Klasse (`setup_check.SetupProblem`), damit `main.py` das als
+  "fertig formatierter Diagnosebericht" statt als unerwarteten Absturz
+  erkennt: Log und Mail zeigen nur die Meldung selbst, **ohne**
+  Python-Traceback (live beobachtet: ein Token ohne Rechte für
+  `object_manager_attributes` -- eigentlich nur "diese eine Berechtigung
+  fehlt" -- sah mit vollem Traceback unnötig alarmierend aus). Eine
+  echte, unerwartete Exception in `check-setup` selbst (ein Bug, keine
+  gefundene Konfigurationslücke) bekommt weiterhin ganz normal einen
+  Traceback. Sinnvoll für den
   Cron-Betrieb: `check-setup` (ohne `--fix`, rein beobachtend) z.B.
   täglich laufen lassen, um Config-Drift oder eine nachträglich in Zammad
   geänderte Gruppen-/Trigger-Struktur automatisch per Mail gemeldet zu
