@@ -228,6 +228,20 @@ def test_cleanup_ussd_text_fixes_mojibake_variant_with_replacement_character():
     assert _cleanup_ussd_text("W?�hl bitte aus:") == "Wähl bitte aus:"
 
 
+def test_cleanup_ussd_text_fixes_further_words_from_live_menu_navigation():
+    """Live per echter USSD-Menuenavigation (*100# -> "2" -> "3")
+    eingefangen: 'Zurück', 'Für' und 'Hauptmenü' -- alle mit demselben
+    "??"-Korruptionsmuster wie 'Ungültige'."""
+    assert (
+        _cleanup_ussd_text("1 Guthaben abfragen\r\n* Zur??ck,15")
+        == "1 Guthaben abfragen\r\n* Zurück,15"
+    )
+    assert (
+        _cleanup_ussd_text("F??r dich liegen keine Optionsdetails vor.\r\n# Hauptmen??,15")
+        == "Für dich liegen keine Optionsdetails vor.\r\n# Hauptmenü,15"
+    )
+
+
 def test_cleanup_ussd_text_fixes_mojibake_variant_with_double_questionmark():
     """Live beobachtet: 'ü' in 'Ungültige' kann auch als ZWEI literale
     Fragezeichen ankommen ('??' statt '?' + Ersatzzeichen)."""

@@ -53,6 +53,9 @@ _FALLBACK_TRIGGERS = (TeltonikaError, TeltonikaApiError, ValueError)
 _USSD_MOJIBAKE_PATTERNS = [
     (re.compile(r"Ung\?.ltige"), "Ungültige"),
     (re.compile(r"W\?.hl"), "Wähl"),
+    (re.compile(r"Zur\?.ck"), "Zurück"),
+    (re.compile(r"F\?.r"), "Für"),
+    (re.compile(r"Hauptmen\?."), "Hauptmenü"),
 ]
 
 
