@@ -33,23 +33,33 @@ _FALLBACK_TRIGGERS = (TeltonikaError, TeltonikaApiError, ValueError)
 
 # Live beobachteter RutOS-Firmware-Bug beim USSD-Decoding: das erste Byte
 # einer UTF-8-Mehrbyte-Sequenz (0xC3, Beginn aller deutschen Umlaute/ß)
-# wird zu einem literalen "?", das zweite Byte rutscht roh als
-# Latin-1-Zeichen durch -- z.B. "ä" (UTF-8: 0xC3 0xA4) wird zu "?¤". Das
-# urspruengliche Zeichen ist zu dem Zeitpunkt, an dem die JSON-Antwort bei
-# uns ankommt, bereits unwiderruflich weg (kein Encoding-Label-Fehler, den
-# man clientseitig umkehren koennte) -- hier nur die BISHER LIVE
-# BEOBACHTETEN Faelle als rein kosmetische Korrektur, damit das Ticket
-# lesbar bleibt. Bei weiteren beobachteten Faellen (z.B. "ü", "ö", "ß")
-# hier ergaenzen.
-_KNOWN_USSD_MOJIBAKE = {
-    "W?¤hl": "Wähl",
-}
+# wird zu einem literalen "?". Das zweite Byte kommt dabei NICHT
+# konsistent an -- live beobachtet als rohes Latin-1-Zeichen ("ä" ->
+# "?¤"), als Unicode-Replacement-Character U+FFFD ("ä" -> "?�", Ticket
+# 7618372) und als zweites literales "?" ("ü" -> "??"). Welche Variante
+# es wird, haengt offenbar vom Rest des Bytestroms ab, nicht nur vom
+# einzelnen Zeichen -- ein Dict mit exakten kaputten Strings muesste
+# daher fuer JEDES Wort JEDE beobachtete Variante einzeln pflegen.
+# Stattdessen ein Muster "'?' + EIN beliebiges Zeichen" als Platzhalter
+# fuer GENAU EIN kaputtes Sonderzeichen (deckt alle drei Varianten
+# gleichzeitig ab), verankert am bekannten Kontext-Wort drumherum. Das
+# urspruengliche Zeichen selbst ist zu dem Zeitpunkt, an dem die
+# JSON-Antwort bei uns ankommt, bereits unwiderruflich weg (kein
+# Encoding-Label-Fehler, den man clientseitig generisch umkehren
+# koennte) -- hier nur die BISHER LIVE BEOBACHTETEN Woerter als rein
+# kosmetische Korrektur, damit das Ticket lesbar bleibt. Bei weiteren
+# beobachteten kaputten Woertern hier ergaenzen (Muster: r"bekannt\?.er
+# Kontext", Ersatz: der vollstaendige korrekte Text).
+_USSD_MOJIBAKE_PATTERNS = [
+    (re.compile(r"Ung\?.ltige"), "Ungültige"),
+    (re.compile(r"W\?.hl"), "Wähl"),
+]
 
 
 def _cleanup_ussd_text(text: str) -> str:
     text = html.unescape(text)
-    for broken, fixed in _KNOWN_USSD_MOJIBAKE.items():
-        text = text.replace(broken, fixed)
+    for pattern, fixed in _USSD_MOJIBAKE_PATTERNS:
+        text = pattern.sub(fixed, text)
     return text
 
 

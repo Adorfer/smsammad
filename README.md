@@ -891,15 +891,20 @@ als öffentlicher Artikel im Ticket, inkl. `&amp;`-artiger HTML-Entities
 (werden per `html.unescape()` aufgelöst) und eines live beobachteten
 RutOS-Firmware-Bugs beim Zeichensatz: das erste Byte einer
 UTF-8-Mehrbyte-Sequenz (0xC3, Beginn aller deutschen Umlaute/ß) wird
-beim USSD-Decoding im Router selbst zu einem literalen `"?"`, das zweite
-Byte rutscht roh als Latin-1-Zeichen durch -- z.B. wird `"ä"` (UTF-8:
-`0xC3 0xA4`) zu `"?¤"`. Das Zeichen ist zu dem Zeitpunkt, an dem die
+beim USSD-Decoding im Router selbst zu einem literalen `"?"`. Das zweite
+Byte kommt dabei **nicht konsistent** an -- live beobachtet als rohes
+Latin-1-Zeichen (`"ä"` → `"?¤"`), als Unicode-Replacement-Character
+`U+FFFD` (`"ä"` → `"?�"`, Ticket 7618372) und als zweites literales `"?"`
+(`"ü"` → `"??"`). Das Zeichen ist zu dem Zeitpunkt, an dem die
 JSON-Antwort bei uns ankommt, bereits unwiderruflich weg; **kein**
 Encoding-Label-Fehler, den man clientseitig allgemein umkehren könnte.
 `balance_check._cleanup_ussd_text()` korrigiert deshalb nur die bisher
-live beobachteten Einzelfälle als rein kosmetischen Workaround
-(`_KNOWN_USSD_MOJIBAKE`) -- bei weiteren beobachteten kaputten Umlauten
-dort ergänzen.
+live beobachteten Wörter als rein kosmetischen Workaround -- als
+**Muster** `"?" + ein beliebiges Zeichen`, verankert am bekannten
+Kontext-Wort (`_USSD_MOJIBAKE_PATTERNS`), statt als Dict exakter kaputter
+Strings: deckt alle drei Korruptionsvarianten für dasselbe Wort
+gleichzeitig ab, statt für jede einzeln einen Eintrag zu brauchen. Bei
+weiteren beobachteten kaputten Wörtern dort ergänzen.
 
 ### `method = "sms"`
 

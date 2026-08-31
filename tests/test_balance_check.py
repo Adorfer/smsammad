@@ -220,6 +220,20 @@ def test_cleanup_ussd_text_fixes_known_mojibake():
     assert _cleanup_ussd_text("W?¤hl bitte aus:") == "Wähl bitte aus:"
 
 
+def test_cleanup_ussd_text_fixes_mojibake_variant_with_replacement_character():
+    """Live beobachtet in Ticket 7618372: dasselbe kaputte 'ä' kann auch
+    als Unicode-Replacement-Character U+FFFD statt als '¤' ankommen --
+    das Muster '?' + EIN beliebiges Zeichen muss BEIDE Varianten decken,
+    ohne dass fuer jede einzeln ein Dict-Eintrag noetig ist."""
+    assert _cleanup_ussd_text("W?�hl bitte aus:") == "Wähl bitte aus:"
+
+
+def test_cleanup_ussd_text_fixes_mojibake_variant_with_double_questionmark():
+    """Live beobachtet: 'ü' in 'Ungültige' kann auch als ZWEI literale
+    Fragezeichen ankommen ('??' statt '?' + Ersatzzeichen)."""
+    assert _cleanup_ussd_text("1,Ung??ltige Eingabe.") == "1,Ungültige Eingabe."
+
+
 def test_cleanup_ussd_text_leaves_normal_text_unchanged():
     assert _cleanup_ussd_text("Aktuelles Guthaben: 25,77 EUR") == "Aktuelles Guthaben: 25,77 EUR"
 
