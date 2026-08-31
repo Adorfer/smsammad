@@ -12,6 +12,7 @@ from smsammad.config import (
 )
 from smsammad.sms_to_ticket import _resolve_sender_id, _subject_excerpt
 from smsammad.teltonika import SmsMessage
+from smsammad.zammad import ZammadError
 
 
 class FakeTeltonika:
@@ -27,11 +28,19 @@ class FakeTeltonika:
 
 
 class FakeZammad:
-    def __init__(self, existing_customers=None, open_ticket=None, last_ticket=None, ticket_groups=None):
+    def __init__(
+        self,
+        existing_customers=None,
+        open_ticket=None,
+        last_ticket=None,
+        ticket_groups=None,
+        raise_group_error=False,
+    ):
         self._existing_customers = existing_customers or {}
         self._open_ticket = open_ticket
         self._last_ticket = last_ticket
         self._ticket_groups = ticket_groups or {}
+        self._raise_group_error = raise_group_error
         self.created_tickets = []
         self.added_articles = []
         self.article_calls = []
@@ -56,6 +65,8 @@ class FakeZammad:
         return self._last_ticket
 
     def get_ticket(self, ticket_id):
+        if self._raise_group_error:
+            raise ZammadError("GET tickets/{} -> HTTP 403: forbidden".format(ticket_id))
         return {"group_id": self._ticket_groups.get(ticket_id, 42)}
 
     def get_group_name(self, group_id):
@@ -238,6 +249,31 @@ def test_known_customer_without_open_ticket_uses_last_ticket_group_when_enabled(
 def test_known_customer_without_any_ticket_falls_back_to_default_group_even_when_enabled():
     teltonika = FakeTeltonika([SmsMessage(index=2, sender="0151 12345678", text="Hallo")])
     zammad = FakeZammad(existing_customers={"+4915112345678": 42}, last_ticket=None)
+
+    sms_to_ticket.run(
+        teltonika, zammad, _config(group_from_last_ticket=True), dry_run=False, budget=FakeBudget()
+    )
+
+    assert zammad.created_tickets == [(42, "Users", "Neues SMS-Ticket: Hallo", "Hallo")]
+
+
+def test_inaccessible_last_ticket_group_falls_back_to_default_group():
+    """Regression: hat der SMSammad-API-User keinen Zugriff auf die Gruppe
+    des letzten Tickets (HTTP 403 -- z.B. weil ein Agent das Ticket manuell
+    in eine dem API-User nie freigeschaltete Gruppe verschoben hat), darf
+    das NICHT crashen, sondern muss auf die feste Default-Gruppe
+    zurueckfallen."""
+
+    class LastTicket:
+        id = 9
+        number = "1009"
+
+    teltonika = FakeTeltonika([SmsMessage(index=2, sender="0151 12345678", text="Hallo")])
+    zammad = FakeZammad(
+        existing_customers={"+4915112345678": 42},
+        last_ticket=LastTicket(),
+        raise_group_error=True,
+    )
 
     sms_to_ticket.run(
         teltonika, zammad, _config(group_from_last_ticket=True), dry_run=False, budget=FakeBudget()

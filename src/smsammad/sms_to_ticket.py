@@ -10,7 +10,7 @@ from .logging_setup import redact_content
 from .phone import PhoneNumberError, to_e164
 from .sms_budget import SmsBudget
 from .teltonika import TeltonikaClient
-from .zammad import ZammadClient
+from .zammad import ZammadClient, ZammadError
 
 logger = logging.getLogger("smsammad")
 
@@ -42,17 +42,28 @@ def _resolve_new_ticket_group(
     `group_from_last_ticket` gesetzt ist -- die Gruppe seines zuletzt
     kontaktierten Tickets (offen oder geschlossen), fuer
     kundenzentrisch arbeitende Teams. Fallback auf `group`, falls der
-    Kunde noch gar kein Ticket hatte oder dessen Gruppe nicht ermittelbar
-    ist."""
+    Kunde noch gar kein Ticket hatte, dessen Gruppe nicht ermittelbar ist,
+    ODER der SMSammad-API-User keinen Zugriff auf diese Gruppe hat (HTTP
+    403 -- kann z.B. passieren, wenn ein Agent ein Ticket manuell in eine
+    Gruppe verschoben hat, fuer die der API-User nie freigeschaltet
+    wurde)."""
     if was_created:
         return config.zammad.new_customer_group
     if config.zammad.group_from_last_ticket and customer_id is not None:
         last_ticket = zammad.find_last_ticket_for_customer(customer_id)
         if last_ticket is not None:
-            last_ticket_full = zammad.get_ticket(last_ticket.id)
-            group_id = last_ticket_full.get("group_id")
-            if group_id:
-                return zammad.get_group_name(group_id)
+            try:
+                last_ticket_full = zammad.get_ticket(last_ticket.id)
+                group_id = last_ticket_full.get("group_id")
+                if group_id:
+                    return zammad.get_group_name(group_id)
+            except ZammadError:
+                logger.warning(
+                    "Gruppe des letzten Tickets von Kunde %s nicht zugreifbar (fehlende "
+                    "Berechtigung?), verwende stattdessen die Default-Gruppe '%s'",
+                    customer_id,
+                    config.zammad.group,
+                )
     return config.zammad.group
 
 
