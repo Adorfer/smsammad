@@ -672,10 +672,21 @@ gespeichert worden.
 
 - **Überlauf** (`[ticket_to_sms] on_overflow`): mehr "Sende-Einheiten"
   (Classic: separate SMS; Multipart: echte Netz-Segmente) als
-  `max_sms_parts` erlaubt (gedeckelt durch die harte Gesamt-Obergrenze
-  oben) → `reject` (nichts senden, Tags `sms-overflow` + `sms-cannotsend`,
-  Priorität hoch, Agent muss kürzen) oder `truncate` (Text bis zur Grenze
-  wortweise gekürzt trotzdem gesendet, Notiz weist auf die Kürzung hin).
+  `max_sms_parts` erlaubt → `reject` (nichts senden, Tags `sms-overflow` +
+  `sms-cannotsend`, Priorität hoch, Agent muss kürzen) oder `truncate`
+  (Text bis zur Grenze wortweise gekürzt trotzdem gesendet, Notiz weist
+  auf die Kürzung hin).
+  - **Im Multipart-Modus** ergibt `max_sms_parts` ein Zeichen-Budget von
+    `max_sms_parts × 153` (GSM-7) bzw. `max_sms_parts × 67` (UCS-2) --
+    aber **gedeckelt** durch die Gesamt-Obergrenze aus der Tabelle oben
+    (1530/630). **Effektives Maximum ist `max_sms_parts = 10`**: schon
+    dabei ist die harte Obergrenze in beiden Encodings erreicht
+    (`10 × 153 = 1530`, `10 × 67 = 670 > 630` → auf 630 gekappt) --
+    höhere Werte ändern nichts mehr. Werte 1–9 ergeben ein
+    proportional kleineres, encoding-abhängiges Budget.
+  - **Im Classic-Modus** gibt es diesen Deckel nicht -- `max_sms_parts`
+    ist dort direkt die Anzahl der eigenständigen Einzel-SMS, jeder Wert
+    wirkt unverändert.
 - **Sende-Budget** (`max_sms_per_hour`/`max_sms_per_24h`, rollierende
   Fenster, keine Kalenderstunden/-tage): bei Erschöpfung bleibt das
   Ticket getaggt und wird automatisch erneut versucht, siehe

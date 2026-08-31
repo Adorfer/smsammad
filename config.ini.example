@@ -106,9 +106,14 @@ open_state_id = 2
 send_mode = "multipart"
 ; Anzahl SMS-Sende-Einheiten ("Credits"), die eine Nachricht maximal
 ; kosten darf, bevor on_overflow greift. Im "classic"-Modus: Anzahl
-; separater Einzel-SMS. Im "multipart"-Modus: Anzahl echter Netz-Segmente
-; (max_sms_parts * 153/67, gedeckelt durch die harte AWS/Twilio-Grenze
-; 1530 GSM-7/630 UCS-2, siehe README).
+; separater Einzel-SMS (kein Deckel -- jeder Wert wirkt).
+; Im "multipart"-Modus: Anzahl echter Netz-Segmente, das ergibt ein
+; Zeichen-Budget von max_sms_parts * 153 (GSM-7) bzw. max_sms_parts * 67
+; (UCS-2) -- ABER gedeckelt durch die harte AWS/Twilio-Obergrenze von 1530
+; GSM-7-/630 UCS-2-Zeichen (siehe README). Effektives MAXIMUM ist daher
+; max_sms_parts = 10 -- ab da ist die harte Obergrenze in JEDEM Encoding
+; bereits erreicht (10*153=1530, 10*67=670>630), hoehere Werte aendern im
+; Multipart-Modus nichts mehr.
 max_sms_parts = 3
 ; Verhalten bei Ueberlauf (> max_sms_parts):
 ; "reject"   -- gar nicht senden, Fehler-Notiz, Tag sms-overflow, Prioritaet
