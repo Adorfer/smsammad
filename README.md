@@ -689,6 +689,22 @@ python3 run.py check-setup --fix    # gefundene Luecken reparieren
   `[zammad] overflow_priority` (existiert als Ticket-Priorität?),
   `phone_field`/`phone_field_fallback` (existieren als aktive Attribute
   am Zammad-User-Objekt?).
+- **Token-Berechtigungs-Check** (ebenfalls rein lesend): ein Zammad-API-
+  Token trägt einen **eigenen** Berechtigungs-Scope ("Token Access" bei
+  der Token-Erstellung), unabhängig davon, welche Rolle der zugehörige
+  User hat -- live entdeckt, dass ein Admin-User einen Token **ohne**
+  `ticket.agent` haben kann. Der Gruppenzugriffs-Check oben (User-Ebene)
+  hätte das NICHT gefunden, da beide Ebenen unabhängig geprüft werden;
+  fehlt `ticket.agent`, scheitert Ticket-Anlage/-Änderung mit HTTP 403
+  `"Token authorization failed"`, egal wie voll der Gruppenzugriff ist.
+  `check-setup` fragt dafür `GET /user_access_token` ab (listet nur die
+  **eigenen** Tokens samt Scope, niemals das Token-Secret selbst) und
+  identifiziert den aktuell verwendeten Token über `last_used_at` -- der
+  Abruf selbst aktualisiert dessen Zeitstempel unmittelbar vorher, ist
+  der jüngste Zeitstempel unter mehreren Tokens nicht eindeutig, wird
+  bewusst "nicht prüfbar" statt geraten. Kein `--fix` möglich: Zammad
+  erlaubt kein nachträgliches Ändern des Scopes eines bestehenden
+  Tokens, nur die Neuanlage eines neuen.
 - **Sicheres Verhalten bei fehlenden Rechten**: jeder Check, der z.B. an
   HTTP 403 scheitert, wird als "nicht prüfbar" berichtet -- `--fix`
   versucht dann **nichts**, statt im Zweifel einen möglicherweise schon

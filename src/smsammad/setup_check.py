@@ -226,6 +226,66 @@ def _check_user_attribute(zammad: ZammadClient, option_label: str, field_name: s
     return True, f"{option_label}={field_name!r} existiert und ist aktiv"
 
 
+# Live entdeckt: ein API-Token traegt einen EIGENEN, vom zugehoerigen
+# User unabhaengigen Berechtigungs-Scope (Zammad: "Token Access"). Ein
+# Token ohne 'ticket.agent' kann keine Tickets anlegen/aendern, selbst
+# wenn der User selbst (und dessen Gruppenzugriff, siehe
+# _check_group_access oben) vollen Zugriff hat -- HTTP 403 "Token
+# authorization failed", eine komplett andere Fehlermeldung als bei
+# fehlendem Gruppenzugriff, und von den obigen Checks NICHT abgedeckt.
+_REQUIRED_TOKEN_PERMISSION = "ticket.agent"
+
+
+def _token_has_permission(granted: list[str], required: str) -> bool:
+    """Bildet Zammads eigene Berechtigungs-Hierarchie nach (siehe
+    lib/auth/permissions.rb): ein Elternrecht wie "ticket" deckt
+    "ticket.agent" mit ab, ebenso ein Wildcard-Eintrag wie "ticket.*"."""
+    if required in granted:
+        return True
+    parent = required.split(".")[0]
+    if parent in granted:
+        return True
+    return any(g.endswith(".*") and required.startswith(g[:-1]) for g in granted)
+
+
+def _check_token_scope(zammad: ZammadClient) -> tuple[bool | None, str]:
+    """Der zuletzt benutzte eigene Token ist mit hoher Sicherheit der
+    gerade aktive: list_my_tokens() selbst aktualisiert dessen
+    last_used_at unmittelbar vor der Antwort. Sind zwei Tokens dabei
+    nicht eindeutig unterscheidbar (identischer juengster Zeitstempel),
+    wird bewusst NICHT geraten, sondern "nicht pruefbar" berichtet."""
+    try:
+        tokens = zammad.list_my_tokens()
+    except ZammadError as exc:
+        return None, f"Token-Liste nicht abrufbar (fehlende Berechtigung?): {exc}"
+
+    with_timestamp = [t for t in tokens if t.get("last_used_at")]
+    if not with_timestamp:
+        return None, "Aktuell verwendeter Token nicht identifizierbar (kein Token mit last_used_at)"
+
+    with_timestamp.sort(key=lambda t: t["last_used_at"], reverse=True)
+    current = with_timestamp[0]
+    if len(with_timestamp) > 1 and with_timestamp[1]["last_used_at"] == current["last_used_at"]:
+        return (
+            None,
+            "Aktuell verwendeter Token nicht eindeutig identifizierbar (mehrere mit "
+            "gleichem last_used_at)",
+        )
+
+    name = current.get("name") or f"id={current.get('id')}"
+    granted = (current.get("preferences") or {}).get("permission") or []
+    if _token_has_permission(granted, _REQUIRED_TOKEN_PERMISSION):
+        return True, f"Aktueller Token {name!r} hat die Berechtigung '{_REQUIRED_TOKEN_PERMISSION}'"
+    return False, (
+        f"Aktueller Token {name!r} hat NICHT die Berechtigung '{_REQUIRED_TOKEN_PERMISSION}' "
+        f"(vorhanden: {granted}) -- Ticket-Anlage/-Änderung scheitert mit HTTP 403 'Token "
+        f"authorization failed', selbst bei vollem Gruppenzugriff des zugehörigen Users. In "
+        f"Zammad unter Profil -> Token Access einen NEUEN Token mit dieser Berechtigung "
+        f"anlegen (nachträgliches Ändern des Scopes eines bestehenden Tokens ist in Zammad "
+        f"nicht vorgesehen)."
+    )
+
+
 def _log_check(problems: list[str], label: str, ok: bool | None, msg: str) -> None:
     """Loggt das Ergebnis EINES Checks und sammelt es in `problems`, falls
     es kein bestaetigtes 'True' ist (False = bestaetigt kaputt, None =
@@ -342,6 +402,10 @@ def run(zammad: ZammadClient, config: Config, fix: bool, dry_run: bool) -> None:
         zammad, "phone_field_fallback", config.zammad.phone_field_fallback
     )
     _log_check(problems, "phone_field_fallback", ok, msg)
+
+    logger.info("check-setup: pruefe Token-Berechtigung '%s' ...", _REQUIRED_TOKEN_PERMISSION)
+    ok, msg = _check_token_scope(zammad)
+    _log_check(problems, "Token-Scope", ok, msg)
 
     if changes:
         logger.info(

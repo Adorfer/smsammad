@@ -357,6 +357,18 @@ class ZammadClient:
         unerwarteten leeren Werten zu scheitern)."""
         return self._request("GET", "object_manager_attributes") or []
 
+    def list_my_tokens(self) -> list[dict[str, Any]]:
+        """Fuer setup_check.py -- eigene API-Tokens samt ihrem eigenen,
+        vom zugehoerigen User UNABHAENGIGEN Berechtigungs-Scope
+        (`preferences.permission`). Live entdeckt: ein Zammad-API-Token
+        traegt eine EIGENE, engere Rechte-Liste als der User, dem er
+        gehoert -- ein Admin-User kann einen Token OHNE 'ticket.agent'
+        haben, dann scheitert z.B. Ticket-Anlage mit HTTP 403 "Token
+        authorization failed", obwohl der User selbst vollen Gruppen-
+        zugriff hat. Liefert NIE das Token-Secret selbst (Zammad zeigt
+        das nach der Erstellung nirgends mehr an)."""
+        return (self._request("GET", "user_access_token") or {}).get("tokens", [])
+
     def create_trigger(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Fuer setup_check.py -- legt den 'sms-out'-Trigger an. Erfordert
         eine Rolle mit Trigger-Verwaltungsrechten, sonst HTTP 403."""

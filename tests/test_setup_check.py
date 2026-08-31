@@ -38,6 +38,20 @@ DEFAULT_USER_ATTRS = [
     {"object": "User", "name": "mobile", "active": True},
     {"object": "User", "name": "phone", "active": True},
 ]
+DEFAULT_TOKENS = [
+    {
+        "id": 1,
+        "name": "smsammad",
+        "last_used_at": "2026-08-31T03:30:00.000Z",
+        "preferences": {"permission": ["admin", "ticket.agent"]},
+    },
+    {
+        "id": 2,
+        "name": "irgendein-anderer-token",
+        "last_used_at": "2026-01-01T00:00:00.000Z",
+        "preferences": {"permission": ["report"]},
+    },
+]
 
 
 class FakeZammad:
@@ -49,6 +63,7 @@ class FakeZammad:
         states=None,
         priorities=None,
         user_attrs=None,
+        tokens=None,
         raise_on_triggers=False,
         raise_on_my_user=False,
         raise_on_update=False,
@@ -56,6 +71,7 @@ class FakeZammad:
         raise_on_states=False,
         raise_on_priorities=False,
         raise_on_user_attrs=False,
+        raise_on_tokens=False,
     ):
         self._triggers = triggers or []
         self._groups = DEFAULT_GROUPS if groups is None else groups
@@ -63,6 +79,7 @@ class FakeZammad:
         self._states = DEFAULT_STATES if states is None else states
         self._priorities = DEFAULT_PRIORITIES if priorities is None else priorities
         self._user_attrs = DEFAULT_USER_ATTRS if user_attrs is None else user_attrs
+        self._tokens = DEFAULT_TOKENS if tokens is None else tokens
         self._raise_on_triggers = raise_on_triggers
         self._raise_on_my_user = raise_on_my_user
         self._raise_on_update = raise_on_update
@@ -70,6 +87,7 @@ class FakeZammad:
         self._raise_on_states = raise_on_states
         self._raise_on_priorities = raise_on_priorities
         self._raise_on_user_attrs = raise_on_user_attrs
+        self._raise_on_tokens = raise_on_tokens
         self.created_triggers = []
         self.updated_users = []
 
@@ -111,6 +129,11 @@ class FakeZammad:
         if self._raise_on_user_attrs:
             raise ZammadError("GET object_manager_attributes -> HTTP 403: forbidden")
         return self._user_attrs
+
+    def list_my_tokens(self):
+        if self._raise_on_tokens:
+            raise ZammadError("GET user_access_token -> HTTP 403: forbidden")
+        return self._tokens
 
 
 def _config(
@@ -471,11 +494,147 @@ def test_user_attrs_permission_error_reports_problem():
         setup_check.run(zammad, _config(), fix=True, dry_run=False)
 
 
+# --- Token-Scope-Check (Live entdeckt: Token traegt eigenen, vom User
+# unabhaengigen Berechtigungs-Scope, siehe zammad.list_my_tokens) -------
+
+
+def test_token_without_ticket_agent_reports_problem():
+    tokens = [
+        {
+            "id": 1,
+            "name": "eingeschraenkter-token",
+            "last_used_at": "2026-08-31T03:30:00.000Z",
+            "preferences": {"permission": ["admin", "report"]},
+        }
+    ]
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], tokens=tokens)
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+    assert "ticket.agent" in str(exc_info.value)
+    assert "eingeschraenkter-token" in str(exc_info.value)
+
+
+def test_admin_permission_alone_does_not_satisfy_ticket_agent():
+    """Live verifiziert (Zammad-Quellcode lib/auth/permissions.rb):
+    'admin' und 'ticket.agent' sind unabhaengige Top-Level-Scopes, 'admin'
+    deckt 'ticket.agent' NICHT automatisch mit ab."""
+    tokens = [
+        {
+            "id": 1,
+            "name": "nur-admin",
+            "last_used_at": "2026-08-31T03:30:00.000Z",
+            "preferences": {"permission": ["admin"]},
+        }
+    ]
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], tokens=tokens)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_token_with_ticket_agent_does_not_raise():
+    tokens = [
+        {
+            "id": 1,
+            "name": "korrekter-token",
+            "last_used_at": "2026-08-31T03:30:00.000Z",
+            "preferences": {"permission": ["ticket.agent"]},
+        }
+    ]
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], tokens=tokens)
+    setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_token_with_parent_ticket_permission_satisfies_check():
+    tokens = [
+        {
+            "id": 1,
+            "name": "eltern-scope",
+            "last_used_at": "2026-08-31T03:30:00.000Z",
+            "preferences": {"permission": ["ticket"]},
+        }
+    ]
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], tokens=tokens)
+    setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_token_with_wildcard_permission_satisfies_check():
+    tokens = [
+        {
+            "id": 1,
+            "name": "wildcard-scope",
+            "last_used_at": "2026-08-31T03:30:00.000Z",
+            "preferences": {"permission": ["ticket.*"]},
+        }
+    ]
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], tokens=tokens)
+    setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_picks_most_recently_used_token_among_several():
+    tokens = [
+        {
+            "id": 1,
+            "name": "alt-und-ohne-rechte",
+            "last_used_at": "2020-01-01T00:00:00.000Z",
+            "preferences": {"permission": []},
+        },
+        {
+            "id": 2,
+            "name": "aktuell-verwendet",
+            "last_used_at": "2026-08-31T03:30:00.000Z",
+            "preferences": {"permission": ["ticket.agent"]},
+        },
+    ]
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], tokens=tokens)
+    # Der Token mit dem juengsten last_used_at hat 'ticket.agent' -> kein
+    # Problem, obwohl ein ANDERER (aelterer) Token keine Rechte hat.
+    setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_ambiguous_last_used_at_is_not_checkable():
+    """Zwei Tokens mit IDENTISCHEM juengstem Zeitstempel -- lieber 'nicht
+    pruefbar' berichten als den falschen zu raten."""
+    tokens = [
+        {
+            "id": 1,
+            "name": "token-a",
+            "last_used_at": "2026-08-31T03:30:00.000Z",
+            "preferences": {"permission": ["ticket.agent"]},
+        },
+        {
+            "id": 2,
+            "name": "token-b",
+            "last_used_at": "2026-08-31T03:30:00.000Z",
+            "preferences": {"permission": []},
+        },
+    ]
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], tokens=tokens)
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+    assert "nicht eindeutig identifizierbar" in str(exc_info.value)
+
+
+def test_no_tokens_with_timestamp_is_not_checkable():
+    tokens = [{"id": 1, "name": "nie-benutzt", "preferences": {"permission": ["ticket.agent"]}}]
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], tokens=tokens)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
+def test_token_list_permission_error_reports_problem():
+    zammad = FakeZammad(triggers=[MATCHING_TRIGGER], raise_on_tokens=True)
+    with pytest.raises(RuntimeError):
+        setup_check.run(zammad, _config(), fix=True, dry_run=False)
+
+
 def test_diagnose_checks_never_raise_in_dry_run():
     zammad = FakeZammad(
         triggers=[MATCHING_TRIGGER],
         raise_on_states=True,
         raise_on_priorities=True,
         raise_on_user_attrs=True,
+        raise_on_tokens=True,
     )
     setup_check.run(zammad, _config(open_state_id=999), fix=True, dry_run=True)
