@@ -15,11 +15,11 @@
 #   praezisere Details liefert, aber z.B. bei einem kaputten config.ini
 #   selbst nicht mehr greifen kann.
 #
-# Aufruf: cron_run.sh <ticket-to-sms|sms-to-ticket> [weitere Argumente]
+# Aufruf: cron_run.sh <ticket-to-sms|sms-to-ticket|balance-check|stats|check-setup> [weitere Argumente]
 
 set -uo pipefail
 
-TASK="${1:?Usage: $0 ticket-to-sms|sms-to-ticket}"
+TASK="${1:?Usage: $0 ticket-to-sms|sms-to-ticket|balance-check|stats|check-setup}"
 shift
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
