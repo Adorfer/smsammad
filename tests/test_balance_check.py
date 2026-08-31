@@ -266,7 +266,9 @@ def test_ussd_method_creates_ticket_and_records_balance(tmp_path):
     assert "Aktuelles Guthaben: 6,00 EUR" in body
     assert zammad.states == [(555, 4)]
     assert budget.latest_balance()[1] == 6.0
-    assert not budget.should_query_balance(interval_hours=24)
+    # USSD ist kostenlos/synchron und darf beliebig oft laufen -- das
+    # Zeitfenster gilt nur fuer die SMS-Abfrage, siehe sms_budget.py.
+    assert budget.should_query_balance(interval_hours=24)
 
 
 def test_ussd_method_unparseable_response_raises_and_falls_back_when_configured(tmp_path):
@@ -294,6 +296,45 @@ def test_ussd_method_access_denied_falls_back_when_configured(tmp_path):
         balance_check.run(teltonika, zammad, config, dry_run=False, budget=budget)
 
     assert teltonika.sent == [("111", "Guthaben")]
+
+
+def test_repeated_ussd_queries_are_never_throttled(tmp_path):
+    """USSD ist synchron/kostenlos -- anders als SMS darf es beliebig oft
+    hintereinander abgefragt werden, auch weit innerhalb von
+    query_interval_hours."""
+    teltonika = FakeTeltonika()
+    zammad = FakeZammad()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+    config = _config(tmp_path, balance=_ussd_only())
+
+    with patch("smsammad.balance_check.TeltonikaApiClient") as api_cls:
+        api_cls.return_value.send_ussd.return_value = _ussd_response("6,00")
+        balance_check.run(teltonika, zammad, config, dry_run=False, budget=budget)
+        balance_check.run(teltonika, zammad, config, dry_run=False, budget=budget)
+        balance_check.run(teltonika, zammad, config, dry_run=False, budget=budget)
+
+    assert api_cls.return_value.send_ussd.call_count == 3
+
+
+def test_ussd_fallback_to_sms_skipped_and_raises_when_sms_recently_queried(tmp_path):
+    """USSD schlaegt fehl, SMS-Fallback ist konfiguriert -- aber eine
+    SMS-Abfrage wurde bereits vor Kurzem geschickt (Zeitfenster noch
+    aktiv). Der Fallback darf dann NICHT trotzdem eine weitere SMS
+    schicken, UND das urspruengliche USSD-Problem darf nicht
+    stillschweigend verschwinden (muss weiterhin durchschlagen, damit es
+    z.B. per Fehlermail auffaellt)."""
+    teltonika = FakeTeltonika()
+    zammad = FakeZammad()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+    budget.mark_balance_queried()
+    config = _config(tmp_path, balance=_both_configured(method="ussd"))
+
+    with patch("smsammad.balance_check.TeltonikaApiClient") as api_cls:
+        api_cls.return_value.send_ussd.side_effect = TeltonikaApiError("Login fehlgeschlagen: HTTP 401")
+        with pytest.raises(TeltonikaApiError):
+            balance_check.run(teltonika, zammad, config, dry_run=False, budget=budget)
+
+    assert teltonika.sent == []
 
 
 def test_ussd_method_failure_without_fallback_configured_raises(tmp_path):

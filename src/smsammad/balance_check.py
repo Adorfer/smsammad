@@ -88,7 +88,9 @@ def _run_ussd(
     if amount_eur is None:
         raise ValueError(f"USSD-Antwort: Betrag nicht erkennbar: {response_text!r}")
 
-    budget.mark_balance_queried()
+    # Bewusst KEIN budget.mark_balance_queried() hier: USSD ist synchron/
+    # kostenlos und wird nie gegen query_interval_hours geprueft (siehe
+    # run() unten) -- das Zeitfenster gilt nur fuer die SMS-Abfrage.
     balance_ticket.apply_balance_result(
         amount_eur, balance_ticket.USSD_PSEUDO_CUSTOMER_ID, response_text, zammad, config, dry_run, budget
     )
@@ -133,13 +135,6 @@ def run(
         config.ticket_to_sms.max_sms_per_24h,
     )
 
-    if not budget.should_query_balance(balance_config.query_interval_hours):
-        logger.info(
-            "balance-check: letzte Abfrage noch nicht %d Stunden her, ueberspringe",
-            balance_config.query_interval_hours,
-        )
-        return
-
     use_sms = balance_config.method == "sms"
     primary_name, primary_fn = ("sms", _run_sms) if use_sms else ("ussd", _run_ussd)
     fallback_name, fallback_fn = ("ussd", _run_ussd) if use_sms else ("sms", _run_sms)
@@ -149,10 +144,38 @@ def run(
         else bool(balance_config.api_username and balance_config.api_password)
     )
 
+    # query_interval_hours gilt NUR fuer die SMS-Abfrage (kostet eine echte
+    # SMS) -- USSD ist synchron/kostenlos und darf beliebig oft laufen,
+    # daher hier NICHT mehr blockweise vor der Methodenwahl geprueft,
+    # sondern nur unmittelbar bevor tatsaechlich eine SMS raus ginge
+    # (egal ob als primaere Methode oder als Fallback nach USSD-Fehler).
+    if primary_name == "sms" and not budget.should_query_balance(balance_config.query_interval_hours):
+        logger.info(
+            "balance-check: letzte SMS-Abfrage noch nicht %d Stunden her, ueberspringe",
+            balance_config.query_interval_hours,
+        )
+        return
+
     try:
         primary_fn(teltonika, zammad, config, dry_run, budget)
     except _FALLBACK_TRIGGERS as exc:
         if not fallback_configured:
+            raise
+        if fallback_name == "sms" and not budget.should_query_balance(
+            balance_config.query_interval_hours
+        ):
+            # Fallback wird NICHT stillschweigend uebersprungen: das
+            # zugrundeliegende USSD-Problem ist ja weiterhin ungeloest,
+            # nur der SMS-Fallback dafuer ist gerade blockiert -- der
+            # urspruengliche Fehler soll trotzdem normal auffallen
+            # (Fehlermail via main.py), nicht kommentarlos verschwinden.
+            logger.warning(
+                "balance-check: Methode '%s' fehlgeschlagen (%s) -- Fallback auf SMS "
+                "uebersprungen, letzte SMS-Abfrage noch nicht %d Stunden her",
+                primary_name,
+                exc,
+                balance_config.query_interval_hours,
+            )
             raise
         logger.warning(
             "balance-check: Methode '%s' fehlgeschlagen (%s) -- wechsle einmalig auf '%s'",

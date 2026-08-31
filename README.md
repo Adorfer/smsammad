@@ -832,6 +832,15 @@ dann fragt `balance-check` einmal täglich das Guthaben der Prepaid-SIM-
 Karte im Router ab. Ohne diese Sektion ist das Feature komplett inaktiv,
 alles andere verhält sich unverändert. Zwei Wege, per `method` wählbar:
 
+`query_interval_hours` (Mindestabstand zwischen zwei Abfragen) gilt
+**ausschließlich für die SMS-Methode** (kostet eine echte SMS) -- USSD
+ist synchron/kostenlos und wird nie dagegen geprüft, egal ob als
+konfigurierte `method="ussd"` oder als automatischer Fallback nach einem
+fehlgeschlagenen SMS-Versuch. Schlägt USSD fehl UND der SMS-Fallback ist
+wegen des Zeitfensters gerade blockiert, wird der ursprüngliche
+USSD-Fehler trotzdem ganz normal durchgereicht (nicht stillschweigend
+übersprungen), damit ein echtes USSD-Problem nicht unbemerkt bleibt.
+
 ### `method = "ussd"` (Default)
 
 Synchron per RutOS-REST-API (`teltonika_api.py`): sendet den USSD-Code

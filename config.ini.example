@@ -204,7 +204,10 @@ reply_sender = "80808"
 ; zusaetzlich einen Warnhinweis
 warn_threshold_eur = 5.00
 alarm_threshold_eur = 1.00
-; Mindestabstand zwischen zwei Abfragen in Stunden
+; Mindestabstand zwischen zwei Abfragen in Stunden -- gilt NUR fuer die
+; SMS-Methode (kostet eine echte SMS). USSD ist synchron/kostenlos und
+; wird NIE gegen dieses Zeitfenster geprueft, egal ob als method="ussd"
+; oder als Fallback nach einem fehlgeschlagenen SMS-Versuch.
 query_interval_hours = 24
 ; Zammad state_id fuer "closed" -- Standard-Zammad-Installationen nutzen 4,
 ; bei Abweichungen ueber 'GET /api/v1/ticket_states' pruefen

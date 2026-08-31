@@ -232,6 +232,9 @@ class SmsBudget:
         return [(datetime.fromisoformat(ts), balance) for ts, balance in rows]
 
     def should_query_balance(self, interval_hours: int, now: datetime | None = None) -> bool:
+        """Gilt NUR fuer die SMS-Guthabenabfrage (kostet eine echte SMS) --
+        die USSD-Abfrage ist synchron/kostenlos und wird von balance_check.py
+        bewusst NIE gegen dieses Zeitfenster geprueft, siehe dort."""
         now = now or datetime.now(timezone.utc)
         with self._connect() as conn:
             row = conn.execute("SELECT value FROM meta WHERE key = 'last_balance_query'").fetchone()
@@ -240,6 +243,10 @@ class SmsBudget:
         return now - datetime.fromisoformat(row[0]) >= timedelta(hours=interval_hours)
 
     def mark_balance_queried(self, now: datetime | None = None) -> None:
+        """Nur nach einer tatsaechlich gesendeten SMS-Guthabenabfrage
+        aufrufen (siehe should_query_balance) -- NICHT nach einer
+        USSD-Abfrage, sonst wuerde eine haeufige kostenlose USSD-Abfrage
+        faelschlich eine faellige SMS-Abfrage mit ausbremsen."""
         now = now or datetime.now(timezone.utc)
         with self._connect() as conn:
             conn.execute(
