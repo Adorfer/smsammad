@@ -123,9 +123,12 @@ max_sms_parts = 3
 ;               gesendeten (gekuerzten) Text.
 on_overflow = "reject"
 ; SMS-Sende-Budget (rollierende Fenster), gilt pro tatsaechlich versendeter
-; SMS (Mehrteiler zaehlen mehrfach). Bei Ueberschreitung wird das jeweilige
-; Ticket zurueckgestellt (Tag sms-out bleibt stehen) und im naechsten Lauf
-; erneut versucht.
+; SMS. Mehrteiler zaehlen mehrfach -- in BEIDEN Modi: im "classic"-Modus
+; je separat versendeter Einzel-SMS, im "multipart"-Modus je tatsaechlich
+; benoetigtem Netz-Segment (intern berechnet, siehe send_mode oben), auch
+; wenn dabei nur EIN API-Aufruf stattfindet. Bei Ueberschreitung wird das
+; jeweilige Ticket zurueckgestellt (Tag sms-out bleibt stehen) und im
+; naechsten Lauf erneut versucht.
 max_sms_per_hour = 20
 max_sms_per_24h = 100
 ; SQLite-Datenbank fuer Budget-Zaehler UND Statistik (Zeitpunkt/Richtung/

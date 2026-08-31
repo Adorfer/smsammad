@@ -688,8 +688,12 @@ gespeichert worden.
     ist dort direkt die Anzahl der eigenständigen Einzel-SMS, jeder Wert
     wirkt unverändert.
 - **Sende-Budget** (`max_sms_per_hour`/`max_sms_per_24h`, rollierende
-  Fenster, keine Kalenderstunden/-tage): bei Erschöpfung bleibt das
-  Ticket getaggt und wird automatisch erneut versucht, siehe
+  Fenster, keine Kalenderstunden/-tage): zählt pro tatsächlich benötigter
+  SMS-Sende-Einheit ("Credits" oben) -- **auch im Multipart-Modus**, wo
+  das intern berechnet wird, obwohl nur EIN API-Aufruf stattfindet (eine
+  Nachricht, die 5 echte Netz-Segmente braucht, zieht 5 vom Budget ab,
+  genau wie 5 separate Einzel-SMS im Classic-Modus). Bei Erschöpfung
+  bleibt das Ticket getaggt und wird automatisch erneut versucht, siehe
   [Budget-Wartehinweis](#budget-wartehinweis-warum-nur-einmalig).
 - **`sms-cannotsend`**: Sammel-Tag für alle Fälle, in denen ein Versand
   gar nicht erst zustande kommt -- keine (Mobilfunk-)Nummer beim Kunden
