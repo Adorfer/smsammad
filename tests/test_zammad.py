@@ -58,6 +58,18 @@ def test_find_existing_customer_with_differently_formatted_number(client):
 
 
 @responses.activate
+def test_find_existing_customer_with_dashes_and_dots(client):
+    """Genau wie oben, aber mit - und . statt Leerzeichen als Trennzeichen
+    -- muss vor der phonenumbers-Normalisierung entfernt werden, nicht
+    auf phonenumbers' eigene Toleranz dafuer verlassen."""
+    responses.add(
+        responses.GET, f"{BASE}/users/search", json=[{"id": 55, "mobile": "0172-1234.567"}]
+    )
+    customer_id = client.find_customer_by_phone("+491721234567", "DE")
+    assert customer_id == 55
+
+
+@responses.activate
 def test_candidate_with_unrelated_number_is_not_matched(client):
     responses.add(
         responses.GET, f"{BASE}/users/search", json=[{"id": 55, "mobile": "+4915199999999"}]

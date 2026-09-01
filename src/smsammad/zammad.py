@@ -27,17 +27,22 @@ def _normalize_for_dedup(value: str) -> str:
     return re.sub(r"[^0-9A-Za-z]", "", value).lower()
 
 
+_PHONE_PUNCTUATION_RE = re.compile(r"[ \-.]")
+
+
 def _phone_matches(raw_value: str, target_e164: str, default_region: str) -> bool:
     """Vergleicht eine roh in Zammad gespeicherte Rufnummer (beliebig
     formatiert, z.B. "+49 172 1234567") mit einer bereits normalisierten
     Ziel-Nummer. Exakter Treffer zuerst (deckt unsere eigenen "Kurzwahl:..."-
     Werte ab, die immer gleich formatiert sind), dann Vergleich ueber
-    phonenumbers-Normalisierung, zuletzt satzzeichen-unabhaengiger
-    Vergleich (siehe _normalize_for_dedup) fuer Pseudo-Identifikatoren."""
+    phonenumbers-Normalisierung -- dafuer bewusst zuerst Leerzeichen/-/.
+    entfernt statt phonenumbers' eigene Toleranz dafuer vorauszusetzen,
+    zuletzt satzzeichen-unabhaengiger Vergleich (siehe _normalize_for_dedup)
+    fuer Pseudo-Identifikatoren."""
     if raw_value == target_e164:
         return True
     try:
-        if to_e164(raw_value, default_region) == target_e164:
+        if to_e164(_PHONE_PUNCTUATION_RE.sub("", raw_value), default_region) == target_e164:
             return True
     except PhoneNumberError:
         pass
