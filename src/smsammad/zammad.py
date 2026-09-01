@@ -52,8 +52,9 @@ def _phone_matches(raw_value: str, target_e164: str, default_region: str) -> boo
 
 def _search_token(value: str) -> str:
     """Letztes alphanumerisches Zammad-Suchtoken eines Werts (Zammads
-    Volltextsuche tokenisiert an nicht-alphanumerischen Zeichen und matcht
-    nur ganze Tokens). Funktioniert sowohl fuer Rufnummern
+    Volltextsuche tokenisiert live verifiziert nur an Leerzeichen -- NICHT
+    an '-' oder '.', die bleiben Teil desselben Tokens -- und matcht nur
+    ganze Tokens). Funktioniert sowohl fuer Rufnummern
     ("+49 172 1234567" -> "1234567") als auch fuer "Kurzwahl:CALLYA" ->
     "CALLYA"."""
     tokens = re.findall(r"[0-9A-Za-z]+", value)
@@ -95,13 +96,22 @@ class ZammadClient:
     def find_customer_by_phone(self, e164_number: str, default_region: str) -> int | None:
         """Rein lesende Suche, ohne Anlage -- fuer --dry-run.
 
-        Zammads Volltextsuche tokenisiert Werte an nicht-alphanumerischen
-        Zeichen und matcht nur ganze Tokens -- eine durchgehende Ziffernfolge
-        wie "491721234567" trifft daher NICHT auf einen als
-        "+49 172 1234567" gespeicherten Wert (dort ist "1234567" das
-        relevante Token). Deshalb mit beidseitigem Wildcard auf das letzte
-        Token suchen (breiter, ggf. auch falsche Treffer), und die
-        Kandidaten anschliessend clientseitig eindeutig verifizieren.
+        Zammads Volltextsuche tokenisiert Werte an Leerzeichen (NICHT an
+        '-' oder '.', live verifiziert) und matcht nur ganze Tokens --
+        eine durchgehende Ziffernfolge wie "491721234567" trifft daher
+        NICHT auf einen als "+49 172 1234567" gespeicherten Wert (dort ist
+        "1234567" das relevante Token). Deshalb mit beidseitigem Wildcard
+        auf das letzte Token suchen (breiter, ggf. auch falsche Treffer),
+        und die Kandidaten anschliessend clientseitig eindeutig
+        verifizieren.
+
+        Deshalb formatiert to_human_readable() (genutzt beim Neuanlegen in
+        find_or_create_customer_by_phone) mit '-' statt Leerzeichen als
+        Gruppentrenner -- ein mit Leerzeichen gruppierter, selbst
+        angelegter Kunde waere sonst bei der naechsten SMS ueber diese
+        Suche nicht mehr wiederauffindbar, sobald die gesuchten letzten
+        Ziffern eine Gruppengrenze ueberqueren (live an einem
+        Test-Kunden verifiziert).
 
         Mehrere Kunden mit derselben Nummer (z.B. Familie am selben
         Handy): das Ticket geht an den mit dem juengsten Kundenkontakt
@@ -148,7 +158,7 @@ class ZammadClient:
 
         field = self._config.phone_field
         # Fuer echte Rufnummern menschenlesbar formatiert (z.B.
-        # "0172 1234 4567"); "Kurzwahl:..."-Werte sind bereits lesbar und
+        # "0172-1234-4567"); "Kurzwahl:..."-Werte sind bereits lesbar und
         # bleiben unveraendert (keine gueltige Rufnummer, to_human_readable
         # wuerde PhoneNumberError werfen).
         try:

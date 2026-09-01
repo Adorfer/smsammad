@@ -50,11 +50,19 @@ def is_mobile_number(number: str, default_region: str) -> bool:
 
 
 def to_human_readable(number: str, default_region: str) -> str:
-    """z.B. '+4917212344567' (DE) -> '0172 1234 4567': Landesvorwahl durch
+    """z.B. '+4917212344567' (DE) -> '0172-1234-4567': Landesvorwahl durch
     den nationalen Trunk-Praefix '0' ersetzt, danach in Vierergruppen.
     Nimmt einen "0"-Trunk-Praefix an (gilt fuer DE/AT/CH u.a., nicht
     universell) -- fuer dieses Projekt ausreichend, da einlaendig genutzt.
+
+    Bindestrich statt Leerzeichen als Trennzeichen: live gegen eine echte
+    Zammad-Instanz verifiziert, dass deren Volltextsuche ein Leerzeichen
+    als Token-Grenze behandelt (ein mit Leerzeichen gruppierter Wert wird
+    dadurch von find_customer_by_phone()'s Such-Token nie gefunden,
+    sobald die gesuchten letzten Ziffern ueber eine Gruppengrenze
+    reichen), '-' und '.' aber NICHT -- bleiben Teil desselben,
+    durchsuchbaren Tokens.
     """
     parsed = _parse(number, default_region)
     digits = f"0{parsed.national_number}"
-    return " ".join(digits[i : i + 4] for i in range(0, len(digits), 4))
+    return "-".join(digits[i : i + 4] for i in range(0, len(digits), 4))

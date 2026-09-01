@@ -1,6 +1,12 @@
 import pytest
 
-from smsammad.phone import PhoneNumberError, is_mobile_number, to_e164, to_teltonika_format
+from smsammad.phone import (
+    PhoneNumberError,
+    is_mobile_number,
+    to_e164,
+    to_human_readable,
+    to_teltonika_format,
+)
 
 
 @pytest.mark.parametrize(
@@ -30,3 +36,10 @@ def test_is_mobile_number_false_for_de_landline():
 
 def test_is_mobile_number_false_for_invalid_value_instead_of_raising():
     assert is_mobile_number("not a number", "DE") is False
+
+
+def test_to_human_readable_de_uses_dash_separator():
+    """Bindestrich statt Leerzeichen als Gruppentrenner -- Zammads
+    Volltextsuche behandelt Leerzeichen als Token-Grenze (live
+    verifiziert), '-' aber nicht. Siehe zammad.py find_customer_by_phone."""
+    assert to_human_readable("+4917212344567", "DE") == "0172-1234-4567"

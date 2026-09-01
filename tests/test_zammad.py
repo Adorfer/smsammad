@@ -94,8 +94,8 @@ def test_create_customer_uses_human_readable_number_and_sms_names(client):
 
     payload = json.loads(responses.calls[-1].request.body)
     assert payload["firstname"] == "SMS"
-    assert payload["lastname"] == "0172 1234 4567"
-    assert payload["mobile"] == "0172 1234 4567"
+    assert payload["lastname"] == "0172-1234-4567"
+    assert payload["mobile"] == "0172-1234-4567"
     assert payload["login"] == "+4917212344567"
 
 
