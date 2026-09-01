@@ -97,15 +97,41 @@ class ZammadClient:
         relevante Token). Deshalb mit beidseitigem Wildcard auf das letzte
         Token suchen (breiter, ggf. auch falsche Treffer), und die
         Kandidaten anschliessend clientseitig eindeutig verifizieren.
+
+        Mehrere Kunden mit derselben Nummer (z.B. Familie am selben
+        Handy): das Ticket geht an den mit dem juengsten Kundenkontakt
+        (aktuellstes Ticket ueberhaupt, offen oder nicht) -- siehe
+        _pick_most_recently_contacted().
         """
         field = self._config.phone_field
         token = _search_token(e164_number)
         results = self._request("GET", "users/search", params={"query": f"*{token}*"}) or []
-        for candidate in results:
-            raw = candidate.get(field)
-            if raw and _phone_matches(raw, e164_number, default_region):
-                return candidate["id"]
-        return None
+        matches = [
+            candidate["id"]
+            for candidate in results
+            if candidate.get(field) and _phone_matches(candidate[field], e164_number, default_region)
+        ]
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0]
+        return self._pick_most_recently_contacted(matches)
+
+    def _pick_most_recently_contacted(self, customer_ids: list[int]) -> int:
+        """Bei mehreren gleichzeitig passenden Kunden (gleiche Rufnummer):
+        pro Kandidat das insgesamt letzte Ticket (find_last_ticket_for_customer)
+        holen und den mit dem juengsten last_contact_at nehmen. Kandidaten
+        ganz ohne Ticket zaehlen als "nie kontaktiert" ("") und landen ans
+        Ende, bleiben aber waehlbar, falls KEIN Kandidat je ein Ticket
+        hatte. Bei Gleichstand (inkl. "alle ohne Ticket") gewinnt die
+        urspruengliche Reihenfolge aus Zammads Suchergebnis -- max() ist
+        stabil und liefert bei gleichem Schluessel den ersten Treffer."""
+
+        def _last_contact_at(customer_id: int) -> str:
+            ticket = self.find_last_ticket_for_customer(customer_id)
+            return (ticket.last_contact_at or "") if ticket else ""
+
+        return max(customer_ids, key=_last_contact_at)
 
     def find_or_create_customer_by_phone(
         self, e164_number: str, default_region: str

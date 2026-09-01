@@ -177,6 +177,63 @@ def test_find_customer_by_phone_returns_none_when_not_found(client):
 
 
 @responses.activate
+def test_find_customer_by_phone_multiple_matches_picks_most_recent_contact(client):
+    """Mehrere Kunden mit derselben Nummer (z.B. Familie am selben Handy):
+    das Ticket muss an den mit dem juengsten Kundenkontakt gehen, nicht
+    einfach an den ersten Treffer aus Zammads Suche."""
+    responses.add(
+        responses.GET,
+        f"{BASE}/users/search",
+        json=[
+            {"id": 10, "mobile": "+491721234567"},
+            {"id": 20, "mobile": "+491721234567"},
+            {"id": 30, "mobile": "+491721234567"},
+        ],
+    )
+    # Reihenfolge der Ticket-Abfragen folgt der Kandidatenreihenfolge oben.
+    responses.add(
+        responses.GET,
+        f"{BASE}/tickets/search",
+        json=[{"id": 1, "number": "1001", "state": "closed", "last_contact_at": "2026-01-01T00:00:00Z"}],
+    )
+    responses.add(
+        responses.GET,
+        f"{BASE}/tickets/search",
+        json=[{"id": 2, "number": "1002", "state": "open", "last_contact_at": "2026-08-01T00:00:00Z"}],
+    )
+    responses.add(
+        responses.GET,
+        f"{BASE}/tickets/search",
+        json=[{"id": 3, "number": "1003", "state": "closed", "last_contact_at": "2026-03-01T00:00:00Z"}],
+    )
+
+    customer_id = client.find_customer_by_phone("+491721234567", "DE")
+
+    assert customer_id == 20
+
+
+@responses.activate
+def test_find_customer_by_phone_multiple_matches_no_tickets_falls_back_to_first(client):
+    """Keiner der mehreren Kandidaten hat je ein Ticket -- dann bleibt es
+    beim ersten Treffer aus Zammads Suche (bisheriges Verhalten als
+    Fallback), statt None zurueckzugeben."""
+    responses.add(
+        responses.GET,
+        f"{BASE}/users/search",
+        json=[
+            {"id": 10, "mobile": "+491721234567"},
+            {"id": 20, "mobile": "+491721234567"},
+        ],
+    )
+    responses.add(responses.GET, f"{BASE}/tickets/search", json=[])
+    responses.add(responses.GET, f"{BASE}/tickets/search", json=[])
+
+    customer_id = client.find_customer_by_phone("+491721234567", "DE")
+
+    assert customer_id == 10
+
+
+@responses.activate
 def test_create_race_retries_search_and_finds_existing(client):
     """Suche findet nichts, Anlage kollidiert (jemand/etwas anderes hat den
     Kunden zwischenzeitlich schon angelegt) -- statt zu scheitern wird noch
