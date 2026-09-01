@@ -5,7 +5,7 @@ import pytest
 import responses
 
 from smsammad.config import ZammadConfig
-from smsammad.zammad import ZammadClient, ZammadError
+from smsammad.zammad import _FALLBACK_TOKEN_LENGTHS, ZammadClient, ZammadError
 
 BASE = "https://zammad.example.local/api/v1"
 
@@ -161,16 +161,22 @@ def test_create_race_finds_customer_with_different_pseudo_id_separator(client):
 def test_create_race_retry_waits_between_attempts_for_index_lag(client):
     """Erste zwei Nach-Suchen leer (Indexierungs-Verzoegerung), dritte
     findet den Kunden -- muss trotzdem noch als Erfolg durchgehen, nicht
-    schon nach dem ersten erfolglosen Retry aufgeben."""
-    responses.add(responses.GET, f"{BASE}/users/search", json=[])
+    schon nach dem ersten erfolglosen Retry aufgeben.
+
+    Jeder erfolglose find_customer_by_phone()-Aufruf macht jetzt bis zu
+    4 GET-Calls (Haupt-Token + 3 Fallback-Laengen) -- responses nutzt bei
+    mehr Calls als registriert automatisch die zuletzt registrierte
+    Antwort weiter, deshalb genuegt es, genug leere Antworten fuer alle
+    drei erfolglosen Versuche (1 initialer + 2 Retries) zu registrieren,
+    bevor die erfolgreiche Antwort kommt."""
+    for _ in range(3 * (1 + len(_FALLBACK_TOKEN_LENGTHS))):
+        responses.add(responses.GET, f"{BASE}/users/search", json=[])
     responses.add(
         responses.POST,
         f"{BASE}/users",
         json={"error": "Login has already been taken", "error_human": "Login has already been taken"},
         status=422,
     )
-    responses.add(responses.GET, f"{BASE}/users/search", json=[])
-    responses.add(responses.GET, f"{BASE}/users/search", json=[])
     responses.add(
         responses.GET, f"{BASE}/users/search", json=[{"id": 61, "mobile": "+4915112345678"}]
     )
@@ -243,6 +249,32 @@ def test_find_customer_by_phone_multiple_matches_no_tickets_falls_back_to_first(
     customer_id = client.find_customer_by_phone("+491721234567", "DE")
 
     assert customer_id == 10
+
+
+@responses.activate
+def test_find_customer_by_phone_falls_back_to_shorter_token(client):
+    """Haupt-Token (7 Ziffern) findet nichts -- z.B. ein Alt-/manuell
+    eingetragener Kunde mit Leerzeichen-Gruppierung, die genau die
+    gesuchten letzten 7 Ziffern zerteilt. Ein kuerzerer Fallback-Token
+    (hier 4 Ziffern) muss ihn trotzdem finden."""
+    responses.add(responses.GET, f"{BASE}/users/search", json=[])  # Haupt-Token, 7 Ziffern
+    responses.add(
+        responses.GET, f"{BASE}/users/search", json=[{"id": 55, "mobile": "0172 8444 999"}]
+    )  # Fallback-Token, 4 Ziffern
+
+    customer_id = client.find_customer_by_phone("+491728444999", "DE")
+
+    assert customer_id == 55
+
+
+@responses.activate
+def test_find_customer_by_phone_fallback_gives_up_after_all_lengths(client):
+    """Auch nach allen Fallback-Laengen kein Treffer -> None, kein
+    Endlos-Nachfragen."""
+    for _ in range(1 + len(_FALLBACK_TOKEN_LENGTHS)):
+        responses.add(responses.GET, f"{BASE}/users/search", json=[])
+
+    assert client.find_customer_by_phone("+491728444999", "DE") is None
 
 
 @responses.activate

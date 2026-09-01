@@ -64,6 +64,14 @@ def _search_token(value: str) -> str:
     return last[-7:] if len(last) >= 7 else last
 
 
+# Fallback-Laengen fuer find_customer_by_phone(), falls der 7-stellige
+# Haupt-Token nichts findet (z.B. Leerzeichen-gruppierte Alt-Kunden).
+# Deckt uebliche Gruppengroessen ab -- kein Bedarf, bis auf 1 Zeichen
+# runterzugehen, das waere unnoetig viele Zusatz-Suchen fuer einen in
+# der Praxis nicht vorkommenden Formatierungsfall.
+_FALLBACK_TOKEN_LENGTHS = (4, 3, 2)
+
+
 @dataclass
 class Ticket:
     id: int
@@ -113,24 +121,46 @@ class ZammadClient:
         Ziffern eine Gruppengrenze ueberqueren (live an einem
         Test-Kunden verifiziert).
 
+        Bleibt der Haupt-Token erfolglos, zusaetzlich mit kuerzeren
+        Endziffern-Token nachsuchen (_FALLBACK_TOKEN_LENGTHS) -- faengt
+        Alt-Kunden bzw. manuell im Zammad-UI mit Leerzeichen eingetragene
+        Nummern ab, deren Gruppierung wir nicht kennen. Kein
+        Laengen-Mindestmass noetig (live verifiziert, auch 1-stellige
+        Token matchen zuverlaessig), zusaetzliche Suchen kosten aber
+        API-Calls -- deshalb nur bei leerem Haupttreffer, nicht immer.
+
         Mehrere Kunden mit derselben Nummer (z.B. Familie am selben
         Handy): das Ticket geht an den mit dem juengsten Kundenkontakt
         (aktuellstes Ticket ueberhaupt, offen oder nicht) -- siehe
         _pick_most_recently_contacted().
         """
-        field = self._config.phone_field
         token = _search_token(e164_number)
-        results = self._request("GET", "users/search", params={"query": f"*{token}*"}) or []
-        matches = [
-            candidate["id"]
-            for candidate in results
-            if candidate.get(field) and _phone_matches(candidate[field], e164_number, default_region)
-        ]
+        matches = self._search_matching_customers(e164_number, default_region, token)
+        if not matches:
+            for length in _FALLBACK_TOKEN_LENGTHS:
+                if length >= len(token):
+                    continue
+                matches = self._search_matching_customers(
+                    e164_number, default_region, token[-length:]
+                )
+                if matches:
+                    break
         if not matches:
             return None
         if len(matches) == 1:
             return matches[0]
         return self._pick_most_recently_contacted(matches)
+
+    def _search_matching_customers(
+        self, e164_number: str, default_region: str, token: str
+    ) -> list[int]:
+        field = self._config.phone_field
+        results = self._request("GET", "users/search", params={"query": f"*{token}*"}) or []
+        return [
+            candidate["id"]
+            for candidate in results
+            if candidate.get(field) and _phone_matches(candidate[field], e164_number, default_region)
+        ]
 
     def _pick_most_recently_contacted(self, customer_ids: list[int]) -> int:
         """Bei mehreren gleichzeitig passenden Kunden (gleiche Rufnummer):
