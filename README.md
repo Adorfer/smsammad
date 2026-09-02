@@ -18,6 +18,28 @@ der über seine Web-API u.a. auch als SMS-Gateway ansprechbar ist (SMS
 senden/empfangen/verwalten über das eingebaute Mobilfunkmodem) — genau
 diese Funktion nutzt dieses Projekt.
 
+## Inhaltsverzeichnis
+
+- [Overview (English)](#overview-english)
+- [Über dieses Projekt](#über-dieses-projekt)
+- [Architektur-Überblick](#architektur-überblick)
+- [Setup](#setup) *(eingeklappt)*
+- [Ausführen](#ausführen) *(eingeklappt)*
+- [Konfigurationsabschnitte](#konfigurationsabschnitte) *(eingeklappt)*
+- [Zammad-Trigger für ausgehende SMS](#zammad-trigger-für-ausgehende-sms) *(eingeklappt)*
+- [Für Zammad-Agenten: SMS manuell verschicken](#für-zammad-agenten-sms-manuell-verschicken) *(eingeklappt)*
+- [Für Zammad-Agenten: Neues Ticket oder bestehendes bei ankommender SMS?](#für-zammad-agenten-neues-ticket-oder-bestehendes-bei-ankommender-sms) *(eingeklappt)*
+- [Für Zammad-Admins: SMSammad-User einrichten](#für-zammad-admins-smsammad-user-einrichten) *(eingeklappt)*
+- [SMS-Versand-Verhalten](#sms-versand-verhalten) *(eingeklappt)*
+- [SMS-Empfangs-Verhalten](#sms-empfangs-verhalten) *(eingeklappt)*
+- [Guthaben-Überwachung (optional)](#guthaben-überwachung-optional) *(eingeklappt)*
+- [Statistik-Mail](#statistik-mail) *(eingeklappt)*
+- [Cron-Betrieb](#cron-betrieb) *(eingeklappt)*
+- [Sicherheitshinweise](#sicherheitshinweise) *(eingeklappt)*
+- [Test](#test) *(eingeklappt)*
+- [Warum diese Design-Entscheidungen](#warum-diese-design-entscheidungen) *(eingeklappt)*
+- [Lizenz](#lizenz)
+
 ## Overview (English)
 
 This is a personal-use integration between the Zammad ticketing system and
@@ -31,8 +53,7 @@ That said: if you're interested in **internationalizing** this (e.g.
 English-language code comments/log output as a build option) or in
 **adapting the prepaid-balance monitoring feature to a different mobile
 provider** than the Vodafone Callya reply format this was built against,
-feel free to reach out — the codebase is small and modular enough that
-either should be a reasonably contained change. See
+feel free to reach out. See
 [Guthaben-Überwachung](#guthaben-überwachung-optional) for the
 provider-specific part.
 
@@ -52,8 +73,7 @@ bewusst so gewählt.
 Falls Interesse an **Internationalisierung** (z.B. englischsprachige Logs/
 Kommentare als Option) oder an **Anpassung der Guthaben-Überwachung an
 einen anderen Mobilfunk-Anbieter** als das hier verwendete Vodafone-Callya-
-Antwortformat besteht: gerne melden. Die Codebasis ist klein und modular
-genug, dass beides mit überschaubarem Aufwand machbar sein sollte.
+Antwortformat besteht: gerne melden.
 
 ## Architektur-Überblick
 
@@ -67,7 +87,12 @@ Zammad-Client (`zammad.py`) und Teltonika-Client (`teltonika.py`):
 - **SMS → Zammad** (`sms-to-ticket`): eingehende SMS werden per Cronjob-
   Poll vom Router geholt, legen ein Zammad-Ticket an bzw. hängen sich an
   ein bestehendes offenes Ticket des Absenders — und werden danach vom
-  Router gelöscht.
+  Router gelöscht. Der Absender-Abgleich erkennt dabei unterschiedliche
+  Schreibweisen derselben Rufnummer (Leerzeichen, Trennzeichen,
+  National-/E.164-Format) zuverlässig als denselben Kunden. Kennt Zammad
+  den Absender bereits, aber ohne offenes Ticket, kann optional
+  (`group_from_last_ticket`) die Gruppe seines zuletzt kontaktierten
+  Tickets statt einer festen Default-Gruppe gewählt werden.
 - **Guthaben-Überwachung** (`balance-check`, optional): tägliche
   Guthaben-Abfrage der Prepaid-SIM-Karte, per Default synchron per USSD
   (RutOS-REST-API), alternativ per SMS (Antwort wird von `sms-to-ticket`
@@ -87,6 +112,741 @@ und `balance_ticket.py` (die Zammad-Ticket-Eskalationslogik, gemeinsam
 genutzt von USSD- und SMS-Weg). Zustand (Rate-Limit-Zähler,
 Statistik-Rohdaten, Guthaben-Verlauf) liegt in einer einzigen SQLite-Datei
 (`sms_budget.py`), s. [Warum SQLite](#warum-sqlite-für-budgetstatistik).
+
+<details>
+<summary><strong>Setup</strong></summary>
+
+## Setup
+
+Keine venv/pip-Installation nötig — Abhängigkeiten kommen aus
+Ubuntu-Paketen (bewusste Entscheidung gegen ein zusätzliches
+Python-Umgebungs-Management für ein so kleines, einzeln deploytes Tool):
+
+```bash
+sudo apt-get install python3-requests python3-phonenumbers python3-pytest python3-responses
+```
+
+Fehlt eines der Laufzeit-Pakete (`python3-requests`/`python3-phonenumbers`)
+beim Start, zeigt `run.py` statt eines rohen Tracebacks eine kurze
+Fehlermeldung mit fertigem, kopierbarem `apt-get install`-Befehl.
+
+Config anlegen (siehe `config.ini.example` für alle Optionen und deren
+Kommentare):
+
+```bash
+cp config.ini.example config.ini
+chmod 600 config.ini
+$EDITOR config.ini
+```
+
+`config.ini` enthält Zugangsdaten (Router-Passwort, Zammad-Token,
+SMTP-Passwort) und **muss** `600` (nur Owner lesbar) bleiben — wird beim
+Start aktiv geprüft (`config._check_permissions`), ein zu offener Modus
+lässt die App mit klarer Fehlermeldung abbrechen statt still weiterzulaufen.
+Alle Text-Werte in der Config **müssen** in Anführungszeichen stehen
+(`"..."` oder `'...'`, beides geht) — vermeidet Rückfragen zum Escaping
+von Leerzeichen in Passwörtern/Gruppennamen/Pfaden, und macht einen
+Inline-Kommentar hinter dem Wert eindeutig erkennbar (siehe unten). Ein
+unquotierter Text-Wert ist ein Config-Fehler (`ConfigError` beim Start,
+kein stiller Fallback). Zahlen und `true`/`false` bleiben unquotiert.
+
+Hinter jedem Wert darf ein `# Kommentar` stehen, z.B.
+`token = "abc123"  # mein API-Token` — configparser kennt das von Haus
+aus nicht (der komplette Rest der Zeile inkl. Anführungszeichen würde
+sonst Teil des Werts, live als kaputter Zammad-Token mit `401 Cant find
+User for Token` beobachtet), SMSammad parst das deshalb selbst,
+quote-bewusst: ein `#` **innerhalb** der Anführungszeichen (z.B. Teil
+eines Passworts) wird nicht als Kommentaranfang missverstanden.
+
+</details>
+
+<details>
+<summary><strong>Ausführen</strong></summary>
+
+## Ausführen
+
+```bash
+python3 run.py ticket-to-sms --config config.ini
+python3 run.py sms-to-ticket --config config.ini
+python3 run.py balance-check --config config.ini
+python3 run.py stats --config config.ini
+python3 run.py check-setup --config config.ini   # optional, siehe unten
+```
+
+`--dry-run` für einen Testlauf ohne Seiteneffekte (keine Zammad-/
+Router-Änderungen, keine Mails), `--verbose` für Debug-Logging. Die
+globalen Flags (`--config`, `--dry-run`, `--verbose`) funktionieren
+sowohl vor als auch nach dem Subcommand (auch gemischt), z.B. sowohl
+`python3 run.py --dry-run sms-to-ticket` als auch
+`python3 run.py sms-to-ticket --dry-run`.
+
+Ohne `--config` wird `config.ini` **direkt neben `run.py`** gesucht
+(nicht in `~/.config/smsammad/`) -- unabhängig vom Arbeitsverzeichnis,
+über den tatsächlichen Installationsort des Pakets ermittelt. Bewusste
+Entscheidung: einfacher für ein einzeln deploytes Tool wie dieses (ein
+Blick ins Projektverzeichnis genügt), die Sicherheitsimplikationen
+(Zugangsdaten im Projektverzeichnis statt in einem dedizierten
+Config-Pfad) sind bekannt -- `chmod 600` (aktiv geprüft beim Start) muss
+hier ausreichen.
+
+</details>
+
+<details>
+<summary><strong>Konfigurationsabschnitte</strong></summary>
+
+## Konfigurationsabschnitte
+
+Vollständige, kommentierte Referenz: `config.ini.example`. Kurzüberblick:
+
+| Sektion | Zweck |
+|---|---|
+| `[teltonika]` | Router-Zugang, TLS-Verhalten, Rufnummer-Region, Kurzwahl:Präfixe |
+| `[zammad]` | Zammad-Zugang, Gruppen für bekannte/unbekannte Absender, Telefonfeld |
+| `[ticket_to_sms]` | SMS-Teile-Limit, Überlauf-Verhalten, Sende-Budget, SQLite-Pfad |
+| `[balance]` | optional, USSD (Default) oder SMS, siehe [Guthaben-Überwachung](#guthaben-überwachung-optional) |
+| `[notification]` | optional, Fehler-/Statistik-Mails; Abschnitt weglassen = dauerhaft deaktiviert |
+
+</details>
+
+<details>
+<summary><strong>Zammad-Trigger für ausgehende SMS</strong></summary>
+
+## Zammad-Trigger für ausgehende SMS
+
+Agenten antworten im **"Anruf"**-Tab eines Tickets, öffentlich (nicht
+intern) — Zammad hat sonst keinen SMS-Kanal. Ein Zammad-Trigger muss
+darauf den Tag `sms-out` setzen:
+
+- Bedingung: Aktion = erstellt, Typ = Telefon, Sichtbarkeit = öffentlich,
+  **Absender = Agent** (zwingend nötig, siehe
+  [Begründung oben](#zammad-trigger-warum-sender-agent-zwingend-nötig-ist)
+  — ohne diese Einschränkung matchen auch eingehende SMS oder eigene
+  System-Vermerke fälschlich).
+- Aktion: Tag `sms-out` hinzufügen.
+
+</details>
+
+<details>
+<summary><strong>Für Zammad-Agenten: SMS manuell verschicken</strong></summary>
+
+## Für Zammad-Agenten: SMS manuell verschicken
+
+Eigenständige Kurzanleitung für den praktischen Alltag am Ticket -- bewusst
+mit gewissen Redundanzen zu den technischen Abschnitten oben, damit sie
+für sich allein funktioniert. Willst du "zu Fuß" eine SMS an einen Kunden
+schicken, gehe so vor:
+
+1. **Kunde anlegen** (falls noch nicht vorhanden) -- wichtig: die
+   **Mobiltelefonnummer** muss im entsprechenden Feld eingetragen sein,
+   sonst kann keine SMS zugestellt werden.
+2. **Neues Ticket** in der Hotline-Queue anlegen, als Artikeltyp
+   **"Anruf"** -- wirklich **nicht** "E-Mail"! Nur Anruf-Artikel werden
+   überhaupt als SMS erkannt und verschickt.
+3. **Betreff ist egal** -- der wird NICHT als SMS verschickt, nur der
+   eigentliche Artikeltext.
+4. **Bitte kurz fassen**: jede angefangene SMS von 160 Zeichen kostet
+   Geld, und mehrteilige SMS kommen beim Empfänger als mehrere einzelne
+   Nachrichten hintereinander und unübersichtlich an.
+5. Nach Klick auf "Aktualisieren" sollte binnen weniger Sekunden
+   automatisch (per Zammad-Trigger) der Tag `sms-out` erscheinen. Falls
+   das ausnahmsweise mal nicht klappt: den Tag `sms-out` einfach selbst
+   über das "+"-Feld bei den Tags ergänzen.
+6. Nach dem nächsten SMSammad-Durchlauf (alle paar Minuten, üblicherweise
+   nach rund 3-10 Minuten) erscheint unter der SMS eine **interne Notiz**
+   mit Versandstatus und dem **exakt gesendeten Wortlaut** -- bitte kurz
+   gegenprüfen, ob z.B. Umlaute/Sonderzeichen korrekt angekommen sind oder
+   der Text (je nach Konfiguration) gekürzt wurde, weil er zu lang war.
+
+</details>
+
+<details>
+<summary><strong>Für Zammad-Agenten: Neues Ticket oder bestehendes bei ankommender SMS?</strong></summary>
+
+## Für Zammad-Agenten: Neues Ticket oder bestehendes bei ankommender SMS?
+
+Wenn eine SMS eines Kunden ankommt, entscheidet SMSammad automatisch nach
+diesen Regeln:
+
+**Bestehendes Ticket bekommt einen neuen Artikel**, wenn der Kunde
+(anhand seiner Mobilnummer) bereits ein Zammad-Kundenkonto **und**
+mindestens ein **offenes** Ticket hat (Status nicht "geschlossen" oder
+"zusammengeführt"). Gibt es mehrere offene Tickets, wird das mit dem
+jüngsten Kundenkontakt gewählt.
+
+**Neues Ticket wird angelegt**, wenn der Absender entweder komplett neu
+ist (noch kein Zammad-Kundenkonto) **oder** zwar ein Kundenkonto hat,
+aber **kein offenes** Ticket (alle bisherigen sind geschlossen/
+zusammengeführt).
+
+**In welche Gruppe/Queue das neue Ticket kommt:**
+
+- **Komplett neuer Kunde** → Gruppe aus `[zammad] new_customer_group`
+  (die "unbekannt"/Triage-Queue).
+- **Bekannter Kunde ohne offenes Ticket** → per `[zammad]
+  group_from_last_ticket` konfigurierbar:
+  - **`false`** (Default): **immer** die feste Gruppe aus `[zammad]
+    group`, **unabhängig davon**, in welcher Queue frühere (geschlossene)
+    Tickets dieses Kunden lagen. Beispiel: War das letzte Ticket eines
+    Kunden in der Queue "Technik" und wurde geschlossen, landet die
+    nächste SMS desselben Kunden trotzdem in der allgemeinen
+    Default-Gruppe, nicht automatisch wieder in "Technik".
+  - **`true`**: die neue SMS landet in der Gruppe des **zuletzt
+    kontaktierten** Tickets dieses Kunden (egal ob offen, geschlossen
+    oder zusammengeführt) -- passend für kundenzentrisch arbeitende Teams
+    ("one face to the customer"), bei denen granulare Einordnung über
+    Tags statt über Queues läuft. Hatte der Kunde noch nie ein Ticket,
+    greift trotzdem der Fallback auf `[zammad] group`.
+  - Falls das Ergebnis (in beiden Modi) fachlich nicht passt: bitte
+    manuell in die richtige Queue verschieben.
+
+</details>
+
+<details>
+<summary><strong>Für Zammad-Admins: SMSammad-User einrichten</strong></summary>
+
+## Für Zammad-Admins: SMSammad-User einrichten
+
+SMSammad braucht einen eigenen Zammad-Benutzer mit API-Token-Zugriff
+(`[zammad] token` in `config.ini`):
+
+1. Neuen Benutzer anlegen (z.B. "SMSammad" o.ä.), Rolle **Agent**.
+2. Über sein Profil einen **API-Token** generieren (Token Access) mit
+   Zugriff auf Ticket-/Artikel-/Tag-/Benutzer-Objekte.
+3. Dem Benutzer **vollen Zugriff auf mindestens die Queues** geben, in
+   denen er arbeiten soll (die unter `[zammad] group`/`new_customer_group`
+   konfigurierten Gruppen) -- ohne diese Berechtigung schlagen
+   Ticket-/Artikel-Aktionen trotz gültigem Token mit Rechtefehlern fehl
+   (Zammads Gruppen-Berechtigungen sind unabhängig von der Rolle).
+
+**Fallstrick im Zammad-Admin-UI**: Beim Ergänzen einer weiteren
+Queue-Berechtigung reicht es **nicht**, die Gruppe im Dropdown
+auszuwählen und rechts auf **"Hinzufügen"** zu klicken -- das trägt die
+Auswahl erstmal nur lokal ins Formular ein. Erst ein Klick auf
+**"Übermitteln"** unten rechts speichert die Änderung tatsächlich. Wird
+das vergessen, wirkt die Berechtigung im UI gesetzt, ist aber nie
+gespeichert worden.
+
+### Optional: `check-setup` -- die Schritte oben automatisch prüfen/reparieren
+
+Statt Trigger und Gruppenzugriff von Hand einzurichten (und bei
+Config-Änderungen von Hand nachzupflegen), kann SMSammad das selbst
+prüfen und -- mit einem API-Token mit erweiterten Rechten -- auch
+reparieren:
+
+```bash
+python3 run.py check-setup          # nur pruefen, nichts aendern
+python3 run.py check-setup --fix    # gefundene Luecken reparieren
+```
+
+- **Hart abgeschaltet per Default**: wirkt nur, wenn `[zammad]
+  self_manage_setup = true` in der `config.ini` gesetzt ist -- bewusst
+  opt-in, weil dieses Feature einen Token mit **Trigger-Verwaltungs-
+  und Nutzerverwaltungsrechten** braucht (i.d.R. Admin-Rolle), die nicht
+  jede Installation vergeben möchte. Auf `false` zurücksetzen schaltet
+  das Feature sofort wieder komplett ab -- z.B. falls Zammads Trigger-/
+  Berechtigungs-API sich in einem Update ändert und dieser Code dagegen
+  bricht.
+- **`--fix` ist ein zweiter, unabhängiger Schalter**: ohne `--fix` wird
+  nur geprüft und berichtet (auch bei `self_manage_setup = true`), egal
+  welche Rechte der Token hat -- nichts wird verändert. Erst `--fix`
+  löst tatsächliche Schreibaktionen aus (siehe unten). `--dry-run` wirkt
+  wie überall: zeigt nur, was `--fix` tun würde, ohne es zu tun.
+- **Trigger-Check**: sucht einen aktiven Trigger, der bei einem
+  öffentlichen Anruf-Artikel vom Agenten den Tag `sms-out` setzt (Name
+  frei wählbar, geprüft wird die Bedingung/Aktion selbst). Fehlt er und
+  `--fix` ist gesetzt, wird er mit genau der oben beschriebenen
+  Bedingung neu angelegt.
+- **Gruppenzugriff-Check**: prüft, ob der eigene API-User vollen Zugriff
+  auf `[zammad] group` und `new_customer_group` hat. Fehlt er und
+  `--fix` ist gesetzt, wird er gewährt (`PUT /users/<eigene id>`,
+  `group_ids`) -- funktioniert nur, wenn der Token selbst
+  Nutzerverwaltungsrechte hat, sonst meldet Zammad HTTP 403 und
+  `check-setup` berichtet das als Fehler, statt abzustürzen.
+- **Nie automatisiert**: neue Gruppen anlegen, falls `group`/
+  `new_customer_group` gar nicht existieren -- das ist ein
+  Konfigurationsfehler (meist ein Tippfehler oder eine verschachtelte
+  Zammad-Gruppe, deren vollständiger `Eltern::Kind`-Name nicht mit dem
+  konfigurierten Kurznamen übereinstimmt, siehe Hinweis in
+  `config.ini.example`), den ein Mensch beheben muss. Passt der
+  konfigurierte Name exakt zum letzten `::`-Segment einer verschachtelten
+  Gruppe, schlägt `check-setup` den vollen Namen als Korrektur vor (live
+  so gefunden: `new_customer_group = "Neanderfunk NIC"` in einer echten
+  `config.ini`, obwohl die Gruppe tatsächlich
+  `"Neanderfunk::Neanderfunk NIC"` heißt -- führte vorher zu HTTP 422 bei
+  jedem unbekannten SMS-Absender).
+- **Zusätzliche rein lesende Diagnose-Checks** (kein `--fix` dafür --
+  ein falscher Status/eine falsche Priorität/ein falscher Feldname ist
+  ein Tippfehler in der `config.ini`, den nur ein Mensch sinnvoll
+  korrigieren kann): `[zammad] open_state_id` und `[balance]
+  closed_state_id` (existiert die ID als Ticket-Status, UND hat sie
+  tatsächlich den semantisch passenden Typ "open"/"closed"?),
+  `[zammad] overflow_priority` (existiert als Ticket-Priorität?),
+  `phone_field`/`phone_field_fallback` (existieren als aktive Attribute
+  am Zammad-User-Objekt?).
+- **Token-Berechtigungs-Check** (ebenfalls rein lesend): ein Zammad-API-
+  Token trägt einen **eigenen** Berechtigungs-Scope ("Token Access" bei
+  der Token-Erstellung), unabhängig davon, welche Rolle der zugehörige
+  User hat -- live entdeckt, dass ein Admin-User einen Token **ohne**
+  `ticket.agent` haben kann. Der Gruppenzugriffs-Check oben (User-Ebene)
+  hätte das NICHT gefunden, da beide Ebenen unabhängig geprüft werden;
+  fehlt `ticket.agent`, scheitert Ticket-Anlage/-Änderung mit HTTP 403
+  `"Token authorization failed"`, egal wie voll der Gruppenzugriff ist.
+  `check-setup` fragt dafür `GET /user_access_token` ab (listet nur die
+  **eigenen** Tokens samt Scope, niemals das Token-Secret selbst) und
+  identifiziert den aktuell verwendeten Token über `last_used_at` -- der
+  Abruf selbst aktualisiert dessen Zeitstempel unmittelbar vorher, ist
+  der jüngste Zeitstempel unter mehreren Tokens nicht eindeutig, wird
+  bewusst "nicht prüfbar" statt geraten. Kein `--fix` möglich: Zammad
+  erlaubt kein nachträgliches Ändern des Scopes eines bestehenden
+  Tokens, nur die Neuanlage eines neuen.
+- **Sicheres Verhalten bei fehlenden Rechten**: jeder Check, der z.B. an
+  HTTP 403 scheitert, wird als "nicht prüfbar" berichtet -- `--fix`
+  versucht dann **nichts**, statt im Zweifel einen möglicherweise schon
+  vorhandenen Trigger doppelt anzulegen.
+- **Ergebnis-Meldung und Exit-Code**: findet `check-setup` (außerhalb von
+  `--dry-run`) mindestens ein ungelöstes Problem, endet der Lauf mit
+  Exit-Code 1 und wirft eine Exception mit zwei Abschnitten -- "Änderungen
+  am Zammad-Setup durchgeführt" (nur bei `--fix`, falls tatsächlich etwas
+  repariert wurde) und "Was Du als Zammad-Admin evtl. ändern solltest"
+  (alles, was offen bleibt). Das nutzt denselben Mechanismus wie bei
+  `ticket-to-sms`/`sms-to-ticket`: `main.py` verschickt bei jeder
+  unbehandelten Exception ohnehin eine Fehlermail (siehe
+  `[notification]`) -- kein separater Mail-Pfad nötig. Intern eine eigene
+  Exception-Klasse (`setup_check.SetupProblem`), damit `main.py` das als
+  "fertig formatierter Diagnosebericht" statt als unerwarteten Absturz
+  erkennt: Log und Mail zeigen nur die Meldung selbst, **ohne**
+  Python-Traceback (live beobachtet: ein Token ohne Rechte für
+  `object_manager_attributes` -- eigentlich nur "diese eine Berechtigung
+  fehlt" -- sah mit vollem Traceback unnötig alarmierend aus). Eine
+  echte, unerwartete Exception in `check-setup` selbst (ein Bug, keine
+  gefundene Konfigurationslücke) bekommt weiterhin ganz normal einen
+  Traceback. Sinnvoll für den
+  Cron-Betrieb: `check-setup` (ohne `--fix`, rein beobachtend) z.B.
+  täglich laufen lassen, um Config-Drift oder eine nachträglich in Zammad
+  geänderte Gruppen-/Trigger-Struktur automatisch per Mail gemeldet zu
+  bekommen, siehe [Cron-Betrieb](#cron-betrieb).
+
+</details>
+
+<details>
+<summary><strong>SMS-Versand-Verhalten</strong></summary>
+
+## SMS-Versand-Verhalten
+
+- **Zielnummer**: primär das konfigurierte Mobilfunk-Feld des Kunden
+  (`[zammad] phone_field`, Default `mobile`). Ist das leer, wird
+  ersatzweise das normale Telefonnummer-Feld (`[zammad]
+  phone_field_fallback`, Default `phone`) geprüft -- aber nur verwendet,
+  wenn `phonenumbers` den dortigen Wert tatsächlich als Mobilfunknummer
+  erkennt (eine erkannte Festnetznummer wird nie als SMS-Ziel benutzt).
+  Liefert keines von beiden eine nutzbare Mobilfunknummer, wird **nicht**
+  gesendet, siehe `sms-cannotsend` unten.
+- **Sende-Modus** (`[ticket_to_sms] send_mode`): steuert, WIE ein langer
+  Text den Empfänger erreicht.
+  - `"multipart"` (**Default**): der komplette Text geht in **einem**
+    API-Aufruf raus (POST, siehe
+    [oben](#teltonika-api-dokumentation-und-ihre-lücken)) -- der Router
+    übernimmt die echte SMS-Verkettung, der Empfänger sieht **eine**
+    Nachricht ohne Präfix.
+  - `"classic"`: eigenes Aufteilen in mehrere eigenständige Einzel-SMS mit
+    `"(N/M) "`-Präfix (`sms_split.split_for_sms`), jede ein eigener
+    API-Aufruf -- historisches Verhalten, kein Reassembly durch den
+    Router.
+  - Beide Modi sind **kodierungsbewusst** (`sms_encoding.py`, Tabelle
+    gegen die offizielle ETSI/GSM-03.38-Zuordnung verifiziert): reiner
+    GSM-7-Text (Standardbuchstaben, Ziffern, gängige Satzzeichen) erlaubt
+    mehr Zeichen pro SMS/Segment als Text mit auch nur einem einzelnen
+    Sonderzeichen (Emoji, viele Akzentbuchstaben, kyrillische/griechische
+    Zeichen außerhalb des GSM-7-Satzes) -- sobald **ein** solches Zeichen
+    vorkommt, wird die **gesamte** Nachricht als UCS-2 kodiert (Standard-
+    verhalten jedes SMS-Encoders). GSM-7-Erweiterungszeichen (`€ ^ { } [
+    ] ~ | \` sowie Form Feed) kosten dabei **zwei** Septets statt eines --
+    ein häufiger Zählfehler, wenn man naiv "1 Zeichen = 1 Kosteneinheit"
+    annimmt. Grenzwerte (AWS/Twilio-Standard, siehe unten):
+
+    | | GSM-7 | UCS-2 |
+    |---|---|---|
+    | Einzel-SMS | 160 Septets | 70 Codeeinheiten |
+    | pro Segment (Mehrteil) | 153 Septets | 67 Codeeinheiten |
+    | Gesamt-Obergrenze | 1530 Septets (10 Segmente) | 630 Codeeinheiten |
+
+- **Überlauf** (`[ticket_to_sms] on_overflow`): mehr "Sende-Einheiten"
+  (Classic: separate SMS; Multipart: echte Netz-Segmente) als
+  `max_sms_parts` erlaubt → `reject` (nichts senden, Tags `sms-overflow` +
+  `sms-cannotsend`, Priorität hoch, Agent muss kürzen) oder `truncate`
+  (Text bis zur Grenze wortweise gekürzt trotzdem gesendet, Notiz weist
+  auf die Kürzung hin).
+  - **Im Multipart-Modus** ergibt `max_sms_parts` ein Zeichen-Budget von
+    `max_sms_parts × 153` (GSM-7) bzw. `max_sms_parts × 67` (UCS-2) --
+    aber **gedeckelt** durch die Gesamt-Obergrenze aus der Tabelle oben
+    (1530/630). **Effektives Maximum ist `max_sms_parts = 10`**: schon
+    dabei ist die harte Obergrenze in beiden Encodings erreicht
+    (`10 × 153 = 1530`, `10 × 67 = 670 > 630` → auf 630 gekappt) --
+    höhere Werte ändern nichts mehr. Werte 1–9 ergeben ein
+    proportional kleineres, encoding-abhängiges Budget.
+  - **Im Classic-Modus** gibt es diesen Deckel nicht -- `max_sms_parts`
+    ist dort direkt die Anzahl der eigenständigen Einzel-SMS, jeder Wert
+    wirkt unverändert.
+- **Sende-Budget** (`max_sms_per_hour`/`max_sms_per_24h`, rollierende
+  Fenster, keine Kalenderstunden/-tage): zählt pro tatsächlich benötigter
+  SMS-Sende-Einheit ("Credits" oben) -- **auch im Multipart-Modus**, wo
+  das intern berechnet wird, obwohl nur EIN API-Aufruf stattfindet (eine
+  Nachricht, die 5 echte Netz-Segmente braucht, zieht 5 vom Budget ab,
+  genau wie 5 separate Einzel-SMS im Classic-Modus). Bei Erschöpfung
+  bleibt das Ticket getaggt und wird automatisch erneut versucht, siehe
+  [Budget-Wartehinweis](#budget-wartehinweis-warum-nur-einmalig).
+- **`sms-cannotsend`**: Sammel-Tag für alle Fälle, in denen ein Versand
+  gar nicht erst zustande kommt -- keine (Mobilfunk-)Nummer beim Kunden
+  gefunden, Text-Überlauf im `reject`-Modus, oder der Router hat den
+  Versand selbst abgelehnt (z.B. kein SMS-Guthaben mehr auf der
+  SIM-Karte, Netzwerk-/Zugangsproblem). In allen Fällen wird `sms-out`
+  entfernt (kein stiller Endlos-Retry mehr), eine interne Notiz mit der
+  Ursache hinterlegt, die Priorität auf `overflow_priority` gesetzt und
+  das Ticket -- falls es gerade geschlossen oder in einem
+  Warten-auf-Rückmeldung-Zustand steht -- wieder auf `open_state_id`
+  (Default `2` = "offen") gesetzt, damit das Problem nicht unbemerkt in
+  einem inaktiven Ticket verschwindet. Agent behebt die Ursache und setzt
+  `sms-out` danach erneut, um einen neuen Versandversuch auszulösen.
+  Priorität/Status/Titel werden dabei in EINEM API-Aufruf gesetzt: Zammad
+  validiert bei jedem Ticket-Update das gesamte Modell (nicht nur die
+  geänderten Felder), ein Ticket mit leerem Titel (Zammad-UI zeigt "-")
+  ließ deshalb live selbst ein reines Prioritäts-Update mit HTTP 422
+  scheitern -- SMSammad vergibt in diesem Fall automatisch einen
+  Platzhalter-Titel (`"SMS-Ticket {Ticketnummer}"`) im selben Request.
+- **Versand-Quittung**: jede erfolgreich gesendete SMS bekommt eine
+  interne Notiz mit Zeichenzahl, Teilanzahl, Zeitstempel und dem exakt
+  gesendeten Text (jeder Teil einzeln in `"..."`, damit Anfang/Ende klar
+  erkennbar sind) — die Notiz bestätigt nur die Übergabe an den Router,
+  eine **SMS-Quittung** (Zustellbestätigung durch die Teltonika-API) gibt
+  es nicht und ist auch nicht in Aussicht.
+
+</details>
+
+<details>
+<summary><strong>SMS-Empfangs-Verhalten</strong></summary>
+
+## SMS-Empfangs-Verhalten
+
+- **Kunde/Ticket-Zuordnung**: bekannter Absender mit offenem Ticket →
+  Artikel wird angehängt; unbekannter Absender oder nur geschlossene
+  Tickets → neues Ticket (Gruppe je nachdem `[zammad] group` oder
+  `new_customer_group`).
+- **Betreff neuer Tickets**: `"Neues SMS-Ticket: {Textauszug}"` --
+  `sms_to_ticket._subject_excerpt` nimmt die ersten 50 Zeichen der SMS;
+  bei längeren Texten nur die ersten 46 Zeichen gefolgt von `"[..]"`
+  (Gesamtlänge bleibt bei 50), damit der Betreff in der Zammad-
+  Ticketliste auf einen Blick erkennbar ist, statt nur "-" oder eines
+  festen Platzhalters zu zeigen. Gilt nur für neu angelegte Tickets --
+  ein Artikel an ein bestehendes offenes Ticket ändert dessen Betreff
+  nicht.
+- **Empfangs-Zeitstempel**: der vom Router gemeldete Zeitstempel (Format
+  laut `sms_list`-Antwort, vermutlich Empfangszeit am Modem) wird als
+  `"\n---\nSMS-Empfang: <Zeitstempel>"` an den Artikeltext angehängt.
+- Nach erfolgreicher Verarbeitung wird die SMS per `sms_delete` vom
+  Router gelöscht (verhindert Doppelverarbeitung im nächsten Cronlauf).
+
+</details>
+
+<details>
+<summary><strong>Guthaben-Überwachung (optional)</strong></summary>
+
+## Guthaben-Überwachung (optional)
+
+`[balance]` in `config.ini` konfigurieren (siehe `config.ini.example`),
+dann fragt `balance-check` einmal täglich das Guthaben der Prepaid-SIM-
+Karte im Router ab. Ohne diese Sektion ist das Feature komplett inaktiv,
+alles andere verhält sich unverändert. Zwei Wege, per `method` wählbar:
+
+`query_interval_hours` (Mindestabstand zwischen zwei Abfragen) gilt
+**ausschließlich für die SMS-Methode** (kostet eine echte SMS) -- USSD
+ist synchron/kostenlos und wird nie dagegen geprüft, egal ob als
+konfigurierte `method="ussd"` oder als automatischer Fallback nach einem
+fehlgeschlagenen SMS-Versuch. Schlägt USSD fehl UND der SMS-Fallback ist
+wegen des Zeitfensters gerade blockiert, wird der ursprüngliche
+USSD-Fehler trotzdem ganz normal durchgereicht (nicht stillschweigend
+übersprungen), damit ein echtes USSD-Problem nicht unbemerkt bleibt.
+
+### `method = "ussd"` (Default)
+
+Synchron per RutOS-REST-API (`teltonika_api.py`): sendet den USSD-Code
+(Default `*100#`) an `/api/modems/<modem_id>/actions/send_ussd`, wertet
+die Antwort **im selben Lauf** aus (kein Warten auf eine Antwort-SMS
+nötig), i.d.R. kostenlos. Details/Herleitung dieses Wegs siehe
+[Warum USSD ueber eine eigene REST-API](#warum-ussd-ueber-eine-eigene-rest-api-statt-ubusgsmctl).
+
+Braucht einen **eigenen, dedizierten Router-Account** mit Zugriff auf die
+Mobile/USSD-API -- live verifiziert, dass der bestehende cgi-bin-
+SMS-Account (`[teltonika]`) dort **keinen** Zugriff hat (`401` beim
+Login). Einrichtung am Router:
+
+1. WebUI → System → Administration → Users → neuen User anlegen
+   (Username/Passwort → `api_username`/`api_password` in `config.ini`).
+2. Dem User explizit Zugriff auf **Network → Mobile** geben (ohne diese
+   Berechtigung gelingt zwar der Login, aber die eigentliche
+   USSD-Aktion liefert `403 Unauthorized` -- live so beobachtet, bis die
+   Berechtigung ergänzt wurde).
+3. `modem_id` prüfen: sichtbar in der Router-WebUI-URL unter
+   Network → Mobile → General (Format `network/mobile/general/<id>`)
+   bzw. im dort ausgelösten `/api/modems/<modem_id>/...`-Request
+   (Browser-Entwicklertools → Netzwerk-Tab). Default `"1-1"` passt für
+   die meisten Single-SIM-Geräte.
+
+Der Betrag wird aus der USSD-Antwort per Regex geparst -- konfigurierbar
+über `ussd_balance_regex` in `config.ini` (Default zugeschnitten auf das
+Menü-Format von Vodafone Callya, z.B. `"Aktuelles Guthaben: 25,77 EUR"`).
+
+**Bekannte kosmetische Macke**: die rohe USSD-Antwort landet unverändert
+als öffentlicher Artikel im Ticket, inkl. `&amp;`-artiger HTML-Entities
+(werden per `html.unescape()` aufgelöst) und eines live beobachteten
+RutOS-Firmware-Bugs beim Zeichensatz: das erste Byte einer
+UTF-8-Mehrbyte-Sequenz (0xC3, Beginn aller deutschen Umlaute/ß) wird
+beim USSD-Decoding im Router selbst zu einem literalen `"?"`. Das zweite
+Byte kommt dabei **nicht konsistent** an -- live beobachtet als rohes
+Latin-1-Zeichen (`"ä"` → `"?¤"`), als Unicode-Replacement-Character
+`U+FFFD` (`"ä"` → `"?�"`, Ticket 7618372) und als zweites literales `"?"`
+(`"ü"` → `"??"`). Das Zeichen ist zu dem Zeitpunkt, an dem die
+JSON-Antwort bei uns ankommt, bereits unwiderruflich weg; **kein**
+Encoding-Label-Fehler, den man clientseitig allgemein umkehren könnte.
+`balance_check._cleanup_ussd_text()` korrigiert deshalb nur die bisher
+live beobachteten Wörter als rein kosmetischen Workaround -- als
+**Muster** `"?" + ein beliebiges Zeichen`, verankert am bekannten
+Kontext-Wort (`_USSD_MOJIBAKE_PATTERNS`), statt als Dict exakter kaputter
+Strings: deckt alle drei Korruptionsvarianten für dasselbe Wort
+gleichzeitig ab, statt für jede einzeln einen Eintrag zu brauchen. Bei
+weiteren beobachteten kaputten Wörtern dort ergänzen.
+
+### `method = "sms"`
+
+Schickt eine Abfrage-SMS (z.B. "Guthaben" an die Kurzwahl `"111"`) an die
+Prepaid-SIM-Karte. Die Antwort-SMS wird von `sms-to-ticket` automatisch
+am konfigurierten `reply_sender` erkannt (roher SMS-Absender-Vergleich,
+unabhängig von der sonstigen Rufnummer-Validierung) und **nicht** über
+den normalen Kunden-Ticket-Pfad verarbeitet, sondern über
+`_process_balance_reply` in `sms_to_ticket.py`. Der Betrag wird ebenfalls
+per Regex geparst -- konfigurierbar über `sms_balance_regex` (Default
+zugeschnitten auf `"Guthaben beträgt 0,98 Euro"`).
+
+### Betrags-Regex: bewusst in `config.ini`, nicht im Code
+
+**Beide Antwortformate sind Provider-Wortlaut-abhängig und damit fragil**
+-- Vodafone/Callya kann den Text jederzeit ändern (auch um Werbung
+einzufügen), das wird also vermutlich mehrfach nachgezogen werden müssen.
+Damit das ohne Code-Änderung/Deploy geht, sind `ussd_balance_regex` und
+`sms_balance_regex` normale `[balance]`-Optionen in `config.ini` (siehe
+`config.ini.example`):
+
+- Muss **genau eine** Erfassungsgruppe `(...)` für den Betrag enthalten
+  (deutsches Komma als Dezimaltrenner, z.B. `25,77`); `re.IGNORECASE`
+  wird immer angewendet.
+- Wird beim Config-Laden validiert (`config._validate_balance_regex`):
+  ein ungültiger regulärer Ausdruck oder eine fehlende Erfassungsgruppe
+  lässt die App mit klarer Fehlermeldung abbrechen, statt erst beim
+  nächsten Cronlauf mitten in der Verarbeitung zu scheitern.
+- Findet der konfigurierte Regex zur Laufzeit trotzdem keinen Treffer
+  (z.B. weil der Provider den Wortlaut zwischenzeitlich geändert hat),
+  wird das **nicht** stillschweigend geschluckt, sondern wirft eine
+  Exception, die über den normalen Fehlerpfad (Fehlermail) sichtbar wird
+  -- siehe
+  [Warum automatischer Fallback](#warum-automatischer-fallback-nur-einmalig-und-nur-wenn-konfiguriert).
+
+Bei einem anderen Provider mit komplett abweichendem Ablauf (nicht nur
+Wortlaut) siehe auch [Über dieses Projekt](#über-dieses-projekt) --
+gerne melden.
+
+### Automatischer Fallback
+
+Sind **beide** Methoden vollständig konfiguriert, schaltet
+`balance-check` bei einem Fehler der Default-Methode (Zugriffsfehler oder
+nicht parsebare Antwort) für den jeweiligen Lauf automatisch auf die
+andere um -- Details/Begründung siehe
+[Warum automatischer Fallback](#warum-automatischer-fallback-nur-einmalig-und-nur-wenn-konfiguriert).
+
+### Ticket-Handling (drei Stufen, unabhängig von der Abfragemethode)
+
+Identisch für USSD und SMS (gemeinsame Logik in `balance_ticket.py`):
+
+- Guthaben **≥ `warn_threshold_eur`**: Ticket wird geschlossen (Betreff
+  "SMS-Guthaben", interne Notiz "noch ausreichend").
+- **Zwischen** `alarm_threshold_eur` und `warn_threshold_eur`: Ticket
+  bleibt offen, Priorität "normal", Betreff "SMS Guthaben sollte
+  aufgeladen werden".
+- **Unter** `alarm_threshold_eur`: Ticket bleibt offen, Priorität "high",
+  Betreff "SMS-Guthaben KRITISCH niedrig - SMS-Versand gefährdet", UND
+  jede SMS-Versand-Notiz (`ticket-to-sms`) bekommt zusätzlich den Hinweis
+  "SMS-Guthaben ist sehr niedrig, SMS wurde evtl. nicht gesendet" (die
+  Teltonika-API meldet einen fehlgeschlagenen Versand wegen leerem
+  Guthaben nicht als Fehler, siehe [Warum HTTP-API](#warum-http-api-statt-e-mailpop3)-Abschnitt
+  zur fehlenden Zustellbestätigung).
+
+Technischer Kniff dahinter: die Pseudo-Kunde/Ticket-Kontinuität nutzt
+für den SMS-Weg exakt dieselbe Infrastruktur wie normale Kurzwahl:
+Absender (`unresolved_sender_prefix`, z.B. `"Kurzwahl:80808"`), für den
+USSD-Weg einen festen Identifikator (`"USSD-Guthaben"`, siehe
+[Warum balance_ticket.py](#warum-balance_ticketpy-als-eigenes-modul)) —
+dadurch entsteht bei "ok" automatisch ein neues Ticket beim nächsten Mal
+(das alte ist ja geschlossen), während bei "warn"/"alarm" sich der
+nächste Lauf an dasselbe offene Ticket hängt und Betreff/Priorität
+aktualisiert. Kein zusätzlicher Code für Reopen-Logik nötig. Die
+Guthaben-Abfrage zählt bewusst **nicht** als Kundenkontakt in der
+normalen Eingehend-Statistik (`budget.record_balance` statt
+`budget.record_received`).
+
+`closed_state_id` in `config.ini` muss zur eigenen Zammad-Installation
+passen (Default `4` gilt für eine Standard-Zammad-Installation) — prüfen
+via:
+
+```bash
+curl -H "Authorization: Token token=..." https://<zammad>/api/v1/ticket_states
+```
+
+Live an der echten Zammad-Instanz verifiziert: `state_id` "closed" = `4`,
+`priority_id` "normal" = `2`, "high" = `3` (`GET /api/v1/ticket_priorities`).
+
+</details>
+
+<details>
+<summary><strong>Statistik-Mail</strong></summary>
+
+## Statistik-Mail
+
+`stats` (typischerweise wöchentlich per Cron) verschickt eine HTML-Mail
+(mit Text-Fallback für Clients ohne HTML-Darstellung) mit SMS-Zahlen nach
+Zammad-Gruppe für die letzten 24 Stunden/7 Tage/30 Tage (Eingehend/
+Ausgehend farblich unterschieden), sowie — falls `[balance]` konfiguriert
+ist — einem Guthaben-Abschnitt: aktueller Stand, durchschnittlicher
+Verbrauch/Tag je Zeitraum, geschätzte Rest-Reichweite in Tagen (basierend
+auf der 7-Tage-Verbrauchsrate; "unbestimmbar", falls in den letzten 7
+Tagen kein positiver Verbrauch messbar war, z.B. nach einer Aufladung).
+
+**Beispiel** (erfundene Werte, Text-Variante -- real zusätzlich als
+HTML-Tabelle mit Farbcodierung Ein/Aus, s.
+[SMS-Versand-Verhalten](#sms-versand-verhalten)):
+
+```
+SMS-Statistik nach Gruppe:
+
+Gruppe                 24 Stunden     7 Tage       30 Tage
+                         Ein   Aus    Ein   Aus    Ein   Aus
+------------------------------------------------------------
+Hotline                    4     6     21    28     88   101
+SMS-Eingang-Unbekannt      1     0      5     0     17     0
+
+Guthaben:
+
+Aktuelles Guthaben: 25.77 Euro (Stand: 30.08.2026 10:00)
+
+Ø Verbrauch/Tag:
+  24 Stunden: 0.15 Euro/Tag
+  7 Tage: 0.18 Euro/Tag
+  30 Tage: 0.21 Euro/Tag
+
+Geschaetzte Reichweite: 143 Tage (Basis: letzte 7 Tage)
+```
+
+Lesehilfe: "Hotline" zeigt z.B. für die letzten 7 Tage 21 eingehende und
+28 ausgehende SMS: 88/101 in den letzten 30 Tagen deuten auf ein aktives
+Ticketaufkommen hin, während "SMS-Eingang-Unbekannt" (Absender ohne
+bestehenden Zammad-Kunden) nur eingehend und ohne Ausgang auftaucht --
+dort landen typischerweise SMS, die noch manuell einem Kunden zugeordnet
+werden müssen. Das Guthaben von 25,77 Euro reicht laut aktueller
+7-Tage-Verbrauchsrate (0,18 Euro/Tag) noch für rund 143 Tage.
+
+</details>
+
+<details>
+<summary><strong>Cron-Betrieb</strong></summary>
+
+## Cron-Betrieb
+
+```bash
+sudo mkdir -p /var/log/smsammad
+sudo chown <cron-user>:<cron-user> /var/log/smsammad
+```
+
+Dann in der **eigenen** Crontab des Cron-Users (`crontab -e`, **nicht**
+`sudo crontab -e`) oder als `/etc/cron.d/`-Datei mit explizitem
+User-Feld:
+
+```
+*/5 * * * * /pfad/zu/smsammad/cron_run.sh sms-to-ticket
+*/5 * * * * /pfad/zu/smsammad/cron_run.sh ticket-to-sms
+0 7 * * *   /pfad/zu/smsammad/cron_run.sh balance-check
+0 8 * * 1   /pfad/zu/smsammad/cron_run.sh stats
+0 6 * * *   /pfad/zu/smsammad/cron_run.sh check-setup
+```
+
+Die letzte Zeile ist **optional** (nur sinnvoll bei `[zammad]
+self_manage_setup = true`, siehe
+[check-setup](#optional-check-setup----die-schritte-oben-automatisch-prüfenreparieren))
+und **bewusst ohne `--fix`**: rein beobachtend, meldet Config-Drift oder
+eine nachträglich in Zammad geänderte Gruppen-/Trigger-Struktur per
+Fehlermail, verändert aber nichts automatisch im laufenden Betrieb --
+`--fix` bleibt eine bewusste, manuelle Aktion
+(`./cron_run.sh check-setup --fix` bzw. `python3 run.py check-setup
+--fix`). Wer das anders möchte, kann `--fix` natürlich auch in die
+Cron-Zeile aufnehmen (`cron_run.sh check-setup --fix` -- **wichtig**:
+`--fix` muss bei `cron_run.sh` wie bei `run.py` selbst NACH dem
+Subcommand stehen, `cron_run.sh` reicht Argumente entsprechend durch).
+
+`cron_run.sh` **niemals** manuell mit `sudo`/als root aufrufen (auch nicht
+zum Testen) — sonst gehören Log-/Lock-Dateien danach root, und der normale
+Cron-User scheitert anschließend mit "Permission denied" (live passiert:
+ein manueller Testlauf mit `sudo` hat eine root-eigene Lock-Datei
+hinterlassen, an der der reguläre Cron-Lauf danach scheiterte).
+
+`cron_run.sh` verhindert überlappende Läufe (`flock`, Lock-Datei bewusst
+unter `/var/log/smsammad/`, **nicht** `/tmp` — aus genau dem
+oben beschriebenen root-Owner-Grund), loggt immer nach
+`/var/log/smsammad/<task>.log` und ist bei Erfolg still (kein
+Cron-Mail-Spam) — bei Fehlern (Exit-Code != 0) geht die Ausgabe zusätzlich
+auf stderr, damit crons eigenes `MAILTO` (falls lokaler Mailversand
+eingerichtet ist) als zweite, grobe Absicherung neben der App-eigenen
+Fehlermail (`config.ini`: `[notification]`) greift — die App-Mail liefert
+präzisere Details, kann aber z.B. bei einer kaputten `config.ini` selbst
+nicht mehr greifen.
+
+</details>
+
+<details>
+<summary><strong>Sicherheitshinweise</strong></summary>
+
+## Sicherheitshinweise
+
+- `config.ini` **immer** `600`, niemals gruppen-/weltlesbar (aktiv
+  geprüft beim Start).
+- Bei einem Mehrbenutzer-Setup (z.B. dedizierter Cron-User): gemeinsam
+  genutzte Projektverzeichnisse per Gruppenrechte + Setgid-Bit teilen,
+  `config.ini` dabei **explizit** von der Gruppenfreigabe ausnehmen
+  (`chmod 600` bleibt bestehen, auch wenn der Rest des Verzeichnisses
+  `664`/`774` bekommt).
+- Log-Inhalte: Rufnummern bleiben lesbar (notwendig fürs Debugging),
+  SMS-/Ticket-**Inhalte** werden maskiert (s.
+  [Content-Redaction](#content-redaction-im-log)).
+- Bei einem Leak von Router- oder SMTP-Zugangsdaten (z.B. versehentlich in
+  einem Log/einer Konsolenausgabe sichtbar geworden): zeitnah rotieren.
+
+</details>
+
+<details>
+<summary><strong>Test</strong></summary>
+
+## Test
+
+```bash
+pytest
+```
+
+Tests laufen komplett gegen Fakes/eine echte temporäre SQLite-Datei (kein
+Netzwerkzugriff nötig, `responses` mockt die Zammad-HTTP-Aufrufe). Echte
+Verifikation gegen den realen Router/die reale Zammad-Instanz erfolgt
+zusätzlich manuell vor jeder als "fertig" markierten Änderung (siehe
+Commit-/Entwicklungshistorie) — Dry-Run zuerst, danach ein bewusster
+einzelner echter Lauf.
+
+</details>
+
+<details>
+<summary><strong>Warum diese Design-Entscheidungen</strong></summary>
 
 ## Warum diese Design-Entscheidungen
 
@@ -452,667 +1212,7 @@ nicht mehr unbewusst mitgelesen. Hintergrund: Logs landen unter
 `/var/log/`, das potenziell einen größeren Adminkreis erreicht als
 Zammad/Mailserver-Zugriff selbst.
 
-## Setup
-
-Keine venv/pip-Installation nötig — Abhängigkeiten kommen aus
-Ubuntu-Paketen (bewusste Entscheidung gegen ein zusätzliches
-Python-Umgebungs-Management für ein so kleines, einzeln deploytes Tool):
-
-```bash
-sudo apt-get install python3-requests python3-phonenumbers python3-pytest python3-responses
-```
-
-Fehlt eines der Laufzeit-Pakete (`python3-requests`/`python3-phonenumbers`)
-beim Start, zeigt `run.py` statt eines rohen Tracebacks eine kurze
-Fehlermeldung mit fertigem, kopierbarem `apt-get install`-Befehl.
-
-Config anlegen (siehe `config.ini.example` für alle Optionen und deren
-Kommentare):
-
-```bash
-cp config.ini.example config.ini
-chmod 600 config.ini
-$EDITOR config.ini
-```
-
-`config.ini` enthält Zugangsdaten (Router-Passwort, Zammad-Token,
-SMTP-Passwort) und **muss** `600` (nur Owner lesbar) bleiben — wird beim
-Start aktiv geprüft (`config._check_permissions`), ein zu offener Modus
-lässt die App mit klarer Fehlermeldung abbrechen statt still weiterzulaufen.
-Alle Text-Werte in der Config **müssen** in Anführungszeichen stehen
-(`"..."` oder `'...'`, beides geht) — vermeidet Rückfragen zum Escaping
-von Leerzeichen in Passwörtern/Gruppennamen/Pfaden, und macht einen
-Inline-Kommentar hinter dem Wert eindeutig erkennbar (siehe unten). Ein
-unquotierter Text-Wert ist ein Config-Fehler (`ConfigError` beim Start,
-kein stiller Fallback). Zahlen und `true`/`false` bleiben unquotiert.
-
-Hinter jedem Wert darf ein `# Kommentar` stehen, z.B.
-`token = "abc123"  # mein API-Token` — configparser kennt das von Haus
-aus nicht (der komplette Rest der Zeile inkl. Anführungszeichen würde
-sonst Teil des Werts, live als kaputter Zammad-Token mit `401 Cant find
-User for Token` beobachtet), SMSammad parst das deshalb selbst,
-quote-bewusst: ein `#` **innerhalb** der Anführungszeichen (z.B. Teil
-eines Passworts) wird nicht als Kommentaranfang missverstanden.
-
-## Ausführen
-
-```bash
-python3 run.py ticket-to-sms --config config.ini
-python3 run.py sms-to-ticket --config config.ini
-python3 run.py balance-check --config config.ini
-python3 run.py stats --config config.ini
-python3 run.py check-setup --config config.ini   # optional, siehe unten
-```
-
-`--dry-run` für einen Testlauf ohne Seiteneffekte (keine Zammad-/
-Router-Änderungen, keine Mails), `--verbose` für Debug-Logging. Die
-globalen Flags (`--config`, `--dry-run`, `--verbose`) funktionieren
-sowohl vor als auch nach dem Subcommand (auch gemischt), z.B. sowohl
-`python3 run.py --dry-run sms-to-ticket` als auch
-`python3 run.py sms-to-ticket --dry-run`.
-
-Ohne `--config` wird `config.ini` **direkt neben `run.py`** gesucht
-(nicht in `~/.config/smsammad/`) -- unabhängig vom Arbeitsverzeichnis,
-über den tatsächlichen Installationsort des Pakets ermittelt. Bewusste
-Entscheidung: einfacher für ein einzeln deploytes Tool wie dieses (ein
-Blick ins Projektverzeichnis genügt), die Sicherheitsimplikationen
-(Zugangsdaten im Projektverzeichnis statt in einem dedizierten
-Config-Pfad) sind bekannt -- `chmod 600` (aktiv geprüft beim Start) muss
-hier ausreichen.
-
-## Konfigurationsabschnitte
-
-Vollständige, kommentierte Referenz: `config.ini.example`. Kurzüberblick:
-
-| Sektion | Zweck |
-|---|---|
-| `[teltonika]` | Router-Zugang, TLS-Verhalten, Rufnummer-Region, Kurzwahl:Präfixe |
-| `[zammad]` | Zammad-Zugang, Gruppen für bekannte/unbekannte Absender, Telefonfeld |
-| `[ticket_to_sms]` | SMS-Teile-Limit, Überlauf-Verhalten, Sende-Budget, SQLite-Pfad |
-| `[balance]` | optional, USSD (Default) oder SMS, siehe [Guthaben-Überwachung](#guthaben-überwachung-optional) |
-| `[notification]` | optional, Fehler-/Statistik-Mails; Abschnitt weglassen = dauerhaft deaktiviert |
-
-## Zammad-Trigger für ausgehende SMS
-
-Agenten antworten im **"Anruf"**-Tab eines Tickets, öffentlich (nicht
-intern) — Zammad hat sonst keinen SMS-Kanal. Ein Zammad-Trigger muss
-darauf den Tag `sms-out` setzen:
-
-- Bedingung: Aktion = erstellt, Typ = Telefon, Sichtbarkeit = öffentlich,
-  **Absender = Agent** (zwingend nötig, siehe
-  [Begründung oben](#zammad-trigger-warum-sender-agent-zwingend-nötig-ist)
-  — ohne diese Einschränkung matchen auch eingehende SMS oder eigene
-  System-Vermerke fälschlich).
-- Aktion: Tag `sms-out` hinzufügen.
-
-## Für Zammad-Agenten: SMS manuell verschicken
-
-Eigenständige Kurzanleitung für den praktischen Alltag am Ticket -- bewusst
-mit gewissen Redundanzen zu den technischen Abschnitten oben, damit sie
-für sich allein funktioniert. Willst du "zu Fuß" eine SMS an einen Kunden
-schicken, gehe so vor:
-
-1. **Kunde anlegen** (falls noch nicht vorhanden) -- wichtig: die
-   **Mobiltelefonnummer** muss im entsprechenden Feld eingetragen sein,
-   sonst kann keine SMS zugestellt werden.
-2. **Neues Ticket** in der Hotline-Queue anlegen, als Artikeltyp
-   **"Anruf"** -- wirklich **nicht** "E-Mail"! Nur Anruf-Artikel werden
-   überhaupt als SMS erkannt und verschickt.
-3. **Betreff ist egal** -- der wird NICHT als SMS verschickt, nur der
-   eigentliche Artikeltext.
-4. **Bitte kurz fassen**: jede angefangene SMS von 160 Zeichen kostet
-   Geld, und mehrteilige SMS kommen beim Empfänger als mehrere einzelne
-   Nachrichten hintereinander und unübersichtlich an.
-5. Nach Klick auf "Aktualisieren" sollte binnen weniger Sekunden
-   automatisch (per Zammad-Trigger) der Tag `sms-out` erscheinen. Falls
-   das ausnahmsweise mal nicht klappt: den Tag `sms-out` einfach selbst
-   über das "+"-Feld bei den Tags ergänzen.
-6. Nach dem nächsten SMSammad-Durchlauf (alle paar Minuten, üblicherweise
-   nach rund 3-10 Minuten) erscheint unter der SMS eine **interne Notiz**
-   mit Versandstatus und dem **exakt gesendeten Wortlaut** -- bitte kurz
-   gegenprüfen, ob z.B. Umlaute/Sonderzeichen korrekt angekommen sind oder
-   der Text (je nach Konfiguration) gekürzt wurde, weil er zu lang war.
-
-## Für Zammad-Agenten: Neues Ticket oder bestehendes bei ankommender SMS?
-
-Wenn eine SMS eines Kunden ankommt, entscheidet SMSammad automatisch nach
-diesen Regeln:
-
-**Bestehendes Ticket bekommt einen neuen Artikel**, wenn der Kunde
-(anhand seiner Mobilnummer) bereits ein Zammad-Kundenkonto **und**
-mindestens ein **offenes** Ticket hat (Status nicht "geschlossen" oder
-"zusammengeführt"). Gibt es mehrere offene Tickets, wird das mit dem
-jüngsten Kundenkontakt gewählt.
-
-**Neues Ticket wird angelegt**, wenn der Absender entweder komplett neu
-ist (noch kein Zammad-Kundenkonto) **oder** zwar ein Kundenkonto hat,
-aber **kein offenes** Ticket (alle bisherigen sind geschlossen/
-zusammengeführt).
-
-**In welche Gruppe/Queue das neue Ticket kommt:**
-
-- **Komplett neuer Kunde** → Gruppe aus `[zammad] new_customer_group`
-  (die "unbekannt"/Triage-Queue).
-- **Bekannter Kunde ohne offenes Ticket** → per `[zammad]
-  group_from_last_ticket` konfigurierbar:
-  - **`false`** (Default): **immer** die feste Gruppe aus `[zammad]
-    group`, **unabhängig davon**, in welcher Queue frühere (geschlossene)
-    Tickets dieses Kunden lagen. Beispiel: War das letzte Ticket eines
-    Kunden in der Queue "Technik" und wurde geschlossen, landet die
-    nächste SMS desselben Kunden trotzdem in der allgemeinen
-    Default-Gruppe, nicht automatisch wieder in "Technik".
-  - **`true`**: die neue SMS landet in der Gruppe des **zuletzt
-    kontaktierten** Tickets dieses Kunden (egal ob offen, geschlossen
-    oder zusammengeführt) -- passend für kundenzentrisch arbeitende Teams
-    ("one face to the customer"), bei denen granulare Einordnung über
-    Tags statt über Queues läuft. Hatte der Kunde noch nie ein Ticket,
-    greift trotzdem der Fallback auf `[zammad] group`.
-  - Falls das Ergebnis (in beiden Modi) fachlich nicht passt: bitte
-    manuell in die richtige Queue verschieben.
-
-## Für Zammad-Admins: SMSammad-User einrichten
-
-SMSammad braucht einen eigenen Zammad-Benutzer mit API-Token-Zugriff
-(`[zammad] token` in `config.ini`):
-
-1. Neuen Benutzer anlegen (z.B. "SMSammad" o.ä.), Rolle **Agent**.
-2. Über sein Profil einen **API-Token** generieren (Token Access) mit
-   Zugriff auf Ticket-/Artikel-/Tag-/Benutzer-Objekte.
-3. Dem Benutzer **vollen Zugriff auf mindestens die Queues** geben, in
-   denen er arbeiten soll (die unter `[zammad] group`/`new_customer_group`
-   konfigurierten Gruppen) -- ohne diese Berechtigung schlagen
-   Ticket-/Artikel-Aktionen trotz gültigem Token mit Rechtefehlern fehl
-   (Zammads Gruppen-Berechtigungen sind unabhängig von der Rolle).
-
-**Fallstrick im Zammad-Admin-UI**: Beim Ergänzen einer weiteren
-Queue-Berechtigung reicht es **nicht**, die Gruppe im Dropdown
-auszuwählen und rechts auf **"Hinzufügen"** zu klicken -- das trägt die
-Auswahl erstmal nur lokal ins Formular ein. Erst ein Klick auf
-**"Übermitteln"** unten rechts speichert die Änderung tatsächlich. Wird
-das vergessen, wirkt die Berechtigung im UI gesetzt, ist aber nie
-gespeichert worden.
-
-### Optional: `check-setup` -- die Schritte oben automatisch prüfen/reparieren
-
-Statt Trigger und Gruppenzugriff von Hand einzurichten (und bei
-Config-Änderungen von Hand nachzupflegen), kann SMSammad das selbst
-prüfen und -- mit einem API-Token mit erweiterten Rechten -- auch
-reparieren:
-
-```bash
-python3 run.py check-setup          # nur pruefen, nichts aendern
-python3 run.py check-setup --fix    # gefundene Luecken reparieren
-```
-
-- **Hart abgeschaltet per Default**: wirkt nur, wenn `[zammad]
-  self_manage_setup = true` in der `config.ini` gesetzt ist -- bewusst
-  opt-in, weil dieses Feature einen Token mit **Trigger-Verwaltungs-
-  und Nutzerverwaltungsrechten** braucht (i.d.R. Admin-Rolle), die nicht
-  jede Installation vergeben möchte. Auf `false` zurücksetzen schaltet
-  das Feature sofort wieder komplett ab -- z.B. falls Zammads Trigger-/
-  Berechtigungs-API sich in einem Update ändert und dieser Code dagegen
-  bricht.
-- **`--fix` ist ein zweiter, unabhängiger Schalter**: ohne `--fix` wird
-  nur geprüft und berichtet (auch bei `self_manage_setup = true`), egal
-  welche Rechte der Token hat -- nichts wird verändert. Erst `--fix`
-  löst tatsächliche Schreibaktionen aus (siehe unten). `--dry-run` wirkt
-  wie überall: zeigt nur, was `--fix` tun würde, ohne es zu tun.
-- **Trigger-Check**: sucht einen aktiven Trigger, der bei einem
-  öffentlichen Anruf-Artikel vom Agenten den Tag `sms-out` setzt (Name
-  frei wählbar, geprüft wird die Bedingung/Aktion selbst). Fehlt er und
-  `--fix` ist gesetzt, wird er mit genau der oben beschriebenen
-  Bedingung neu angelegt.
-- **Gruppenzugriff-Check**: prüft, ob der eigene API-User vollen Zugriff
-  auf `[zammad] group` und `new_customer_group` hat. Fehlt er und
-  `--fix` ist gesetzt, wird er gewährt (`PUT /users/<eigene id>`,
-  `group_ids`) -- funktioniert nur, wenn der Token selbst
-  Nutzerverwaltungsrechte hat, sonst meldet Zammad HTTP 403 und
-  `check-setup` berichtet das als Fehler, statt abzustürzen.
-- **Nie automatisiert**: neue Gruppen anlegen, falls `group`/
-  `new_customer_group` gar nicht existieren -- das ist ein
-  Konfigurationsfehler (meist ein Tippfehler oder eine verschachtelte
-  Zammad-Gruppe, deren vollständiger `Eltern::Kind`-Name nicht mit dem
-  konfigurierten Kurznamen übereinstimmt, siehe Hinweis in
-  `config.ini.example`), den ein Mensch beheben muss. Passt der
-  konfigurierte Name exakt zum letzten `::`-Segment einer verschachtelten
-  Gruppe, schlägt `check-setup` den vollen Namen als Korrektur vor (live
-  so gefunden: `new_customer_group = "Neanderfunk NIC"` in einer echten
-  `config.ini`, obwohl die Gruppe tatsächlich
-  `"Neanderfunk::Neanderfunk NIC"` heißt -- führte vorher zu HTTP 422 bei
-  jedem unbekannten SMS-Absender).
-- **Zusätzliche rein lesende Diagnose-Checks** (kein `--fix` dafür --
-  ein falscher Status/eine falsche Priorität/ein falscher Feldname ist
-  ein Tippfehler in der `config.ini`, den nur ein Mensch sinnvoll
-  korrigieren kann): `[zammad] open_state_id` und `[balance]
-  closed_state_id` (existiert die ID als Ticket-Status, UND hat sie
-  tatsächlich den semantisch passenden Typ "open"/"closed"?),
-  `[zammad] overflow_priority` (existiert als Ticket-Priorität?),
-  `phone_field`/`phone_field_fallback` (existieren als aktive Attribute
-  am Zammad-User-Objekt?).
-- **Token-Berechtigungs-Check** (ebenfalls rein lesend): ein Zammad-API-
-  Token trägt einen **eigenen** Berechtigungs-Scope ("Token Access" bei
-  der Token-Erstellung), unabhängig davon, welche Rolle der zugehörige
-  User hat -- live entdeckt, dass ein Admin-User einen Token **ohne**
-  `ticket.agent` haben kann. Der Gruppenzugriffs-Check oben (User-Ebene)
-  hätte das NICHT gefunden, da beide Ebenen unabhängig geprüft werden;
-  fehlt `ticket.agent`, scheitert Ticket-Anlage/-Änderung mit HTTP 403
-  `"Token authorization failed"`, egal wie voll der Gruppenzugriff ist.
-  `check-setup` fragt dafür `GET /user_access_token` ab (listet nur die
-  **eigenen** Tokens samt Scope, niemals das Token-Secret selbst) und
-  identifiziert den aktuell verwendeten Token über `last_used_at` -- der
-  Abruf selbst aktualisiert dessen Zeitstempel unmittelbar vorher, ist
-  der jüngste Zeitstempel unter mehreren Tokens nicht eindeutig, wird
-  bewusst "nicht prüfbar" statt geraten. Kein `--fix` möglich: Zammad
-  erlaubt kein nachträgliches Ändern des Scopes eines bestehenden
-  Tokens, nur die Neuanlage eines neuen.
-- **Sicheres Verhalten bei fehlenden Rechten**: jeder Check, der z.B. an
-  HTTP 403 scheitert, wird als "nicht prüfbar" berichtet -- `--fix`
-  versucht dann **nichts**, statt im Zweifel einen möglicherweise schon
-  vorhandenen Trigger doppelt anzulegen.
-- **Ergebnis-Meldung und Exit-Code**: findet `check-setup` (außerhalb von
-  `--dry-run`) mindestens ein ungelöstes Problem, endet der Lauf mit
-  Exit-Code 1 und wirft eine Exception mit zwei Abschnitten -- "Änderungen
-  am Zammad-Setup durchgeführt" (nur bei `--fix`, falls tatsächlich etwas
-  repariert wurde) und "Was Du als Zammad-Admin evtl. ändern solltest"
-  (alles, was offen bleibt). Das nutzt denselben Mechanismus wie bei
-  `ticket-to-sms`/`sms-to-ticket`: `main.py` verschickt bei jeder
-  unbehandelten Exception ohnehin eine Fehlermail (siehe
-  `[notification]`) -- kein separater Mail-Pfad nötig. Intern eine eigene
-  Exception-Klasse (`setup_check.SetupProblem`), damit `main.py` das als
-  "fertig formatierter Diagnosebericht" statt als unerwarteten Absturz
-  erkennt: Log und Mail zeigen nur die Meldung selbst, **ohne**
-  Python-Traceback (live beobachtet: ein Token ohne Rechte für
-  `object_manager_attributes` -- eigentlich nur "diese eine Berechtigung
-  fehlt" -- sah mit vollem Traceback unnötig alarmierend aus). Eine
-  echte, unerwartete Exception in `check-setup` selbst (ein Bug, keine
-  gefundene Konfigurationslücke) bekommt weiterhin ganz normal einen
-  Traceback. Sinnvoll für den
-  Cron-Betrieb: `check-setup` (ohne `--fix`, rein beobachtend) z.B.
-  täglich laufen lassen, um Config-Drift oder eine nachträglich in Zammad
-  geänderte Gruppen-/Trigger-Struktur automatisch per Mail gemeldet zu
-  bekommen, siehe [Cron-Betrieb](#cron-betrieb).
-
-## SMS-Versand-Verhalten
-
-- **Zielnummer**: primär das konfigurierte Mobilfunk-Feld des Kunden
-  (`[zammad] phone_field`, Default `mobile`). Ist das leer, wird
-  ersatzweise das normale Telefonnummer-Feld (`[zammad]
-  phone_field_fallback`, Default `phone`) geprüft -- aber nur verwendet,
-  wenn `phonenumbers` den dortigen Wert tatsächlich als Mobilfunknummer
-  erkennt (eine erkannte Festnetznummer wird nie als SMS-Ziel benutzt).
-  Liefert keines von beiden eine nutzbare Mobilfunknummer, wird **nicht**
-  gesendet, siehe `sms-cannotsend` unten.
-- **Sende-Modus** (`[ticket_to_sms] send_mode`): steuert, WIE ein langer
-  Text den Empfänger erreicht.
-  - `"multipart"` (**Default**): der komplette Text geht in **einem**
-    API-Aufruf raus (POST, siehe
-    [oben](#teltonika-api-dokumentation-und-ihre-lücken)) -- der Router
-    übernimmt die echte SMS-Verkettung, der Empfänger sieht **eine**
-    Nachricht ohne Präfix.
-  - `"classic"`: eigenes Aufteilen in mehrere eigenständige Einzel-SMS mit
-    `"(N/M) "`-Präfix (`sms_split.split_for_sms`), jede ein eigener
-    API-Aufruf -- historisches Verhalten, kein Reassembly durch den
-    Router.
-  - Beide Modi sind **kodierungsbewusst** (`sms_encoding.py`, Tabelle
-    gegen die offizielle ETSI/GSM-03.38-Zuordnung verifiziert): reiner
-    GSM-7-Text (Standardbuchstaben, Ziffern, gängige Satzzeichen) erlaubt
-    mehr Zeichen pro SMS/Segment als Text mit auch nur einem einzelnen
-    Sonderzeichen (Emoji, viele Akzentbuchstaben, kyrillische/griechische
-    Zeichen außerhalb des GSM-7-Satzes) -- sobald **ein** solches Zeichen
-    vorkommt, wird die **gesamte** Nachricht als UCS-2 kodiert (Standard-
-    verhalten jedes SMS-Encoders). GSM-7-Erweiterungszeichen (`€ ^ { } [
-    ] ~ | \` sowie Form Feed) kosten dabei **zwei** Septets statt eines --
-    ein häufiger Zählfehler, wenn man naiv "1 Zeichen = 1 Kosteneinheit"
-    annimmt. Grenzwerte (AWS/Twilio-Standard, siehe unten):
-
-    | | GSM-7 | UCS-2 |
-    |---|---|---|
-    | Einzel-SMS | 160 Septets | 70 Codeeinheiten |
-    | pro Segment (Mehrteil) | 153 Septets | 67 Codeeinheiten |
-    | Gesamt-Obergrenze | 1530 Septets (10 Segmente) | 630 Codeeinheiten |
-
-- **Überlauf** (`[ticket_to_sms] on_overflow`): mehr "Sende-Einheiten"
-  (Classic: separate SMS; Multipart: echte Netz-Segmente) als
-  `max_sms_parts` erlaubt → `reject` (nichts senden, Tags `sms-overflow` +
-  `sms-cannotsend`, Priorität hoch, Agent muss kürzen) oder `truncate`
-  (Text bis zur Grenze wortweise gekürzt trotzdem gesendet, Notiz weist
-  auf die Kürzung hin).
-  - **Im Multipart-Modus** ergibt `max_sms_parts` ein Zeichen-Budget von
-    `max_sms_parts × 153` (GSM-7) bzw. `max_sms_parts × 67` (UCS-2) --
-    aber **gedeckelt** durch die Gesamt-Obergrenze aus der Tabelle oben
-    (1530/630). **Effektives Maximum ist `max_sms_parts = 10`**: schon
-    dabei ist die harte Obergrenze in beiden Encodings erreicht
-    (`10 × 153 = 1530`, `10 × 67 = 670 > 630` → auf 630 gekappt) --
-    höhere Werte ändern nichts mehr. Werte 1–9 ergeben ein
-    proportional kleineres, encoding-abhängiges Budget.
-  - **Im Classic-Modus** gibt es diesen Deckel nicht -- `max_sms_parts`
-    ist dort direkt die Anzahl der eigenständigen Einzel-SMS, jeder Wert
-    wirkt unverändert.
-- **Sende-Budget** (`max_sms_per_hour`/`max_sms_per_24h`, rollierende
-  Fenster, keine Kalenderstunden/-tage): zählt pro tatsächlich benötigter
-  SMS-Sende-Einheit ("Credits" oben) -- **auch im Multipart-Modus**, wo
-  das intern berechnet wird, obwohl nur EIN API-Aufruf stattfindet (eine
-  Nachricht, die 5 echte Netz-Segmente braucht, zieht 5 vom Budget ab,
-  genau wie 5 separate Einzel-SMS im Classic-Modus). Bei Erschöpfung
-  bleibt das Ticket getaggt und wird automatisch erneut versucht, siehe
-  [Budget-Wartehinweis](#budget-wartehinweis-warum-nur-einmalig).
-- **`sms-cannotsend`**: Sammel-Tag für alle Fälle, in denen ein Versand
-  gar nicht erst zustande kommt -- keine (Mobilfunk-)Nummer beim Kunden
-  gefunden, Text-Überlauf im `reject`-Modus, oder der Router hat den
-  Versand selbst abgelehnt (z.B. kein SMS-Guthaben mehr auf der
-  SIM-Karte, Netzwerk-/Zugangsproblem). In allen Fällen wird `sms-out`
-  entfernt (kein stiller Endlos-Retry mehr), eine interne Notiz mit der
-  Ursache hinterlegt, die Priorität auf `overflow_priority` gesetzt und
-  das Ticket -- falls es gerade geschlossen oder in einem
-  Warten-auf-Rückmeldung-Zustand steht -- wieder auf `open_state_id`
-  (Default `2` = "offen") gesetzt, damit das Problem nicht unbemerkt in
-  einem inaktiven Ticket verschwindet. Agent behebt die Ursache und setzt
-  `sms-out` danach erneut, um einen neuen Versandversuch auszulösen.
-  Priorität/Status/Titel werden dabei in EINEM API-Aufruf gesetzt: Zammad
-  validiert bei jedem Ticket-Update das gesamte Modell (nicht nur die
-  geänderten Felder), ein Ticket mit leerem Titel (Zammad-UI zeigt "-")
-  ließ deshalb live selbst ein reines Prioritäts-Update mit HTTP 422
-  scheitern -- SMSammad vergibt in diesem Fall automatisch einen
-  Platzhalter-Titel (`"SMS-Ticket {Ticketnummer}"`) im selben Request.
-- **Versand-Quittung**: jede erfolgreich gesendete SMS bekommt eine
-  interne Notiz mit Zeichenzahl, Teilanzahl, Zeitstempel und dem exakt
-  gesendeten Text (jeder Teil einzeln in `"..."`, damit Anfang/Ende klar
-  erkennbar sind) — die Notiz bestätigt nur die Übergabe an den Router,
-  eine **SMS-Quittung** (Zustellbestätigung durch die Teltonika-API) gibt
-  es nicht und ist auch nicht in Aussicht.
-
-## SMS-Empfangs-Verhalten
-
-- **Kunde/Ticket-Zuordnung**: bekannter Absender mit offenem Ticket →
-  Artikel wird angehängt; unbekannter Absender oder nur geschlossene
-  Tickets → neues Ticket (Gruppe je nachdem `[zammad] group` oder
-  `new_customer_group`).
-- **Betreff neuer Tickets**: `"Neues SMS-Ticket: {Textauszug}"` --
-  `sms_to_ticket._subject_excerpt` nimmt die ersten 50 Zeichen der SMS;
-  bei längeren Texten nur die ersten 46 Zeichen gefolgt von `"[..]"`
-  (Gesamtlänge bleibt bei 50), damit der Betreff in der Zammad-
-  Ticketliste auf einen Blick erkennbar ist, statt nur "-" oder eines
-  festen Platzhalters zu zeigen. Gilt nur für neu angelegte Tickets --
-  ein Artikel an ein bestehendes offenes Ticket ändert dessen Betreff
-  nicht.
-- **Empfangs-Zeitstempel**: der vom Router gemeldete Zeitstempel (Format
-  laut `sms_list`-Antwort, vermutlich Empfangszeit am Modem) wird als
-  `"\n---\nSMS-Empfang: <Zeitstempel>"` an den Artikeltext angehängt.
-- Nach erfolgreicher Verarbeitung wird die SMS per `sms_delete` vom
-  Router gelöscht (verhindert Doppelverarbeitung im nächsten Cronlauf).
-
-## Guthaben-Überwachung (optional)
-
-`[balance]` in `config.ini` konfigurieren (siehe `config.ini.example`),
-dann fragt `balance-check` einmal täglich das Guthaben der Prepaid-SIM-
-Karte im Router ab. Ohne diese Sektion ist das Feature komplett inaktiv,
-alles andere verhält sich unverändert. Zwei Wege, per `method` wählbar:
-
-`query_interval_hours` (Mindestabstand zwischen zwei Abfragen) gilt
-**ausschließlich für die SMS-Methode** (kostet eine echte SMS) -- USSD
-ist synchron/kostenlos und wird nie dagegen geprüft, egal ob als
-konfigurierte `method="ussd"` oder als automatischer Fallback nach einem
-fehlgeschlagenen SMS-Versuch. Schlägt USSD fehl UND der SMS-Fallback ist
-wegen des Zeitfensters gerade blockiert, wird der ursprüngliche
-USSD-Fehler trotzdem ganz normal durchgereicht (nicht stillschweigend
-übersprungen), damit ein echtes USSD-Problem nicht unbemerkt bleibt.
-
-### `method = "ussd"` (Default)
-
-Synchron per RutOS-REST-API (`teltonika_api.py`): sendet den USSD-Code
-(Default `*100#`) an `/api/modems/<modem_id>/actions/send_ussd`, wertet
-die Antwort **im selben Lauf** aus (kein Warten auf eine Antwort-SMS
-nötig), i.d.R. kostenlos. Details/Herleitung dieses Wegs siehe
-[Warum USSD ueber eine eigene REST-API](#warum-ussd-ueber-eine-eigene-rest-api-statt-ubusgsmctl).
-
-Braucht einen **eigenen, dedizierten Router-Account** mit Zugriff auf die
-Mobile/USSD-API -- live verifiziert, dass der bestehende cgi-bin-
-SMS-Account (`[teltonika]`) dort **keinen** Zugriff hat (`401` beim
-Login). Einrichtung am Router:
-
-1. WebUI → System → Administration → Users → neuen User anlegen
-   (Username/Passwort → `api_username`/`api_password` in `config.ini`).
-2. Dem User explizit Zugriff auf **Network → Mobile** geben (ohne diese
-   Berechtigung gelingt zwar der Login, aber die eigentliche
-   USSD-Aktion liefert `403 Unauthorized` -- live so beobachtet, bis die
-   Berechtigung ergänzt wurde).
-3. `modem_id` prüfen: sichtbar in der Router-WebUI-URL unter
-   Network → Mobile → General (Format `network/mobile/general/<id>`)
-   bzw. im dort ausgelösten `/api/modems/<modem_id>/...`-Request
-   (Browser-Entwicklertools → Netzwerk-Tab). Default `"1-1"` passt für
-   die meisten Single-SIM-Geräte.
-
-Der Betrag wird aus der USSD-Antwort per Regex geparst -- konfigurierbar
-über `ussd_balance_regex` in `config.ini` (Default zugeschnitten auf das
-Menü-Format von Vodafone Callya, z.B. `"Aktuelles Guthaben: 25,77 EUR"`).
-
-**Bekannte kosmetische Macke**: die rohe USSD-Antwort landet unverändert
-als öffentlicher Artikel im Ticket, inkl. `&amp;`-artiger HTML-Entities
-(werden per `html.unescape()` aufgelöst) und eines live beobachteten
-RutOS-Firmware-Bugs beim Zeichensatz: das erste Byte einer
-UTF-8-Mehrbyte-Sequenz (0xC3, Beginn aller deutschen Umlaute/ß) wird
-beim USSD-Decoding im Router selbst zu einem literalen `"?"`. Das zweite
-Byte kommt dabei **nicht konsistent** an -- live beobachtet als rohes
-Latin-1-Zeichen (`"ä"` → `"?¤"`), als Unicode-Replacement-Character
-`U+FFFD` (`"ä"` → `"?�"`, Ticket 7618372) und als zweites literales `"?"`
-(`"ü"` → `"??"`). Das Zeichen ist zu dem Zeitpunkt, an dem die
-JSON-Antwort bei uns ankommt, bereits unwiderruflich weg; **kein**
-Encoding-Label-Fehler, den man clientseitig allgemein umkehren könnte.
-`balance_check._cleanup_ussd_text()` korrigiert deshalb nur die bisher
-live beobachteten Wörter als rein kosmetischen Workaround -- als
-**Muster** `"?" + ein beliebiges Zeichen`, verankert am bekannten
-Kontext-Wort (`_USSD_MOJIBAKE_PATTERNS`), statt als Dict exakter kaputter
-Strings: deckt alle drei Korruptionsvarianten für dasselbe Wort
-gleichzeitig ab, statt für jede einzeln einen Eintrag zu brauchen. Bei
-weiteren beobachteten kaputten Wörtern dort ergänzen.
-
-### `method = "sms"`
-
-Schickt eine Abfrage-SMS (z.B. "Guthaben" an die Kurzwahl `"111"`) an die
-Prepaid-SIM-Karte. Die Antwort-SMS wird von `sms-to-ticket` automatisch
-am konfigurierten `reply_sender` erkannt (roher SMS-Absender-Vergleich,
-unabhängig von der sonstigen Rufnummer-Validierung) und **nicht** über
-den normalen Kunden-Ticket-Pfad verarbeitet, sondern über
-`_process_balance_reply` in `sms_to_ticket.py`. Der Betrag wird ebenfalls
-per Regex geparst -- konfigurierbar über `sms_balance_regex` (Default
-zugeschnitten auf `"Guthaben beträgt 0,98 Euro"`).
-
-### Betrags-Regex: bewusst in `config.ini`, nicht im Code
-
-**Beide Antwortformate sind Provider-Wortlaut-abhängig und damit fragil**
--- Vodafone/Callya kann den Text jederzeit ändern (auch um Werbung
-einzufügen), das wird also vermutlich mehrfach nachgezogen werden müssen.
-Damit das ohne Code-Änderung/Deploy geht, sind `ussd_balance_regex` und
-`sms_balance_regex` normale `[balance]`-Optionen in `config.ini` (siehe
-`config.ini.example`):
-
-- Muss **genau eine** Erfassungsgruppe `(...)` für den Betrag enthalten
-  (deutsches Komma als Dezimaltrenner, z.B. `25,77`); `re.IGNORECASE`
-  wird immer angewendet.
-- Wird beim Config-Laden validiert (`config._validate_balance_regex`):
-  ein ungültiger regulärer Ausdruck oder eine fehlende Erfassungsgruppe
-  lässt die App mit klarer Fehlermeldung abbrechen, statt erst beim
-  nächsten Cronlauf mitten in der Verarbeitung zu scheitern.
-- Findet der konfigurierte Regex zur Laufzeit trotzdem keinen Treffer
-  (z.B. weil der Provider den Wortlaut zwischenzeitlich geändert hat),
-  wird das **nicht** stillschweigend geschluckt, sondern wirft eine
-  Exception, die über den normalen Fehlerpfad (Fehlermail) sichtbar wird
-  -- siehe
-  [Warum automatischer Fallback](#warum-automatischer-fallback-nur-einmalig-und-nur-wenn-konfiguriert).
-
-Bei einem anderen Provider mit komplett abweichendem Ablauf (nicht nur
-Wortlaut) siehe auch [Über dieses Projekt](#über-dieses-projekt) --
-gerne melden.
-
-### Automatischer Fallback
-
-Sind **beide** Methoden vollständig konfiguriert, schaltet
-`balance-check` bei einem Fehler der Default-Methode (Zugriffsfehler oder
-nicht parsebare Antwort) für den jeweiligen Lauf automatisch auf die
-andere um -- Details/Begründung siehe
-[Warum automatischer Fallback](#warum-automatischer-fallback-nur-einmalig-und-nur-wenn-konfiguriert).
-
-### Ticket-Handling (drei Stufen, unabhängig von der Abfragemethode)
-
-Identisch für USSD und SMS (gemeinsame Logik in `balance_ticket.py`):
-
-- Guthaben **≥ `warn_threshold_eur`**: Ticket wird geschlossen (Betreff
-  "SMS-Guthaben", interne Notiz "noch ausreichend").
-- **Zwischen** `alarm_threshold_eur` und `warn_threshold_eur`: Ticket
-  bleibt offen, Priorität "normal", Betreff "SMS Guthaben sollte
-  aufgeladen werden".
-- **Unter** `alarm_threshold_eur`: Ticket bleibt offen, Priorität "high",
-  Betreff "SMS-Guthaben KRITISCH niedrig - SMS-Versand gefährdet", UND
-  jede SMS-Versand-Notiz (`ticket-to-sms`) bekommt zusätzlich den Hinweis
-  "SMS-Guthaben ist sehr niedrig, SMS wurde evtl. nicht gesendet" (die
-  Teltonika-API meldet einen fehlgeschlagenen Versand wegen leerem
-  Guthaben nicht als Fehler, siehe [Warum HTTP-API](#warum-http-api-statt-e-mailpop3)-Abschnitt
-  zur fehlenden Zustellbestätigung).
-
-Technischer Kniff dahinter: die Pseudo-Kunde/Ticket-Kontinuität nutzt
-für den SMS-Weg exakt dieselbe Infrastruktur wie normale Kurzwahl:
-Absender (`unresolved_sender_prefix`, z.B. `"Kurzwahl:80808"`), für den
-USSD-Weg einen festen Identifikator (`"USSD-Guthaben"`, siehe
-[Warum balance_ticket.py](#warum-balance_ticketpy-als-eigenes-modul)) —
-dadurch entsteht bei "ok" automatisch ein neues Ticket beim nächsten Mal
-(das alte ist ja geschlossen), während bei "warn"/"alarm" sich der
-nächste Lauf an dasselbe offene Ticket hängt und Betreff/Priorität
-aktualisiert. Kein zusätzlicher Code für Reopen-Logik nötig. Die
-Guthaben-Abfrage zählt bewusst **nicht** als Kundenkontakt in der
-normalen Eingehend-Statistik (`budget.record_balance` statt
-`budget.record_received`).
-
-`closed_state_id` in `config.ini` muss zur eigenen Zammad-Installation
-passen (Default `4` gilt für eine Standard-Zammad-Installation) — prüfen
-via:
-
-```bash
-curl -H "Authorization: Token token=..." https://<zammad>/api/v1/ticket_states
-```
-
-Live an der echten Zammad-Instanz verifiziert: `state_id` "closed" = `4`,
-`priority_id` "normal" = `2`, "high" = `3` (`GET /api/v1/ticket_priorities`).
-
-## Statistik-Mail
-
-`stats` (typischerweise wöchentlich per Cron) verschickt eine HTML-Mail
-(mit Text-Fallback für Clients ohne HTML-Darstellung) mit SMS-Zahlen nach
-Zammad-Gruppe für die letzten 24 Stunden/7 Tage/30 Tage (Eingehend/
-Ausgehend farblich unterschieden), sowie — falls `[balance]` konfiguriert
-ist — einem Guthaben-Abschnitt: aktueller Stand, durchschnittlicher
-Verbrauch/Tag je Zeitraum, geschätzte Rest-Reichweite in Tagen (basierend
-auf der 7-Tage-Verbrauchsrate; "unbestimmbar", falls in den letzten 7
-Tagen kein positiver Verbrauch messbar war, z.B. nach einer Aufladung).
-
-**Beispiel** (erfundene Werte, Text-Variante -- real zusätzlich als
-HTML-Tabelle mit Farbcodierung Ein/Aus, s.
-[SMS-Versand-Verhalten](#sms-versand-verhalten)):
-
-```
-SMS-Statistik nach Gruppe:
-
-Gruppe                 24 Stunden     7 Tage       30 Tage
-                         Ein   Aus    Ein   Aus    Ein   Aus
-------------------------------------------------------------
-Hotline                    4     6     21    28     88   101
-SMS-Eingang-Unbekannt      1     0      5     0     17     0
-
-Guthaben:
-
-Aktuelles Guthaben: 25.77 Euro (Stand: 30.08.2026 10:00)
-
-Ø Verbrauch/Tag:
-  24 Stunden: 0.15 Euro/Tag
-  7 Tage: 0.18 Euro/Tag
-  30 Tage: 0.21 Euro/Tag
-
-Geschaetzte Reichweite: 143 Tage (Basis: letzte 7 Tage)
-```
-
-Lesehilfe: "Hotline" zeigt z.B. für die letzten 7 Tage 21 eingehende und
-28 ausgehende SMS: 88/101 in den letzten 30 Tagen deuten auf ein aktives
-Ticketaufkommen hin, während "SMS-Eingang-Unbekannt" (Absender ohne
-bestehenden Zammad-Kunden) nur eingehend und ohne Ausgang auftaucht --
-dort landen typischerweise SMS, die noch manuell einem Kunden zugeordnet
-werden müssen. Das Guthaben von 25,77 Euro reicht laut aktueller
-7-Tage-Verbrauchsrate (0,18 Euro/Tag) noch für rund 143 Tage.
-
-## Cron-Betrieb
-
-```bash
-sudo mkdir -p /var/log/smsammad
-sudo chown <cron-user>:<cron-user> /var/log/smsammad
-```
-
-Dann in der **eigenen** Crontab des Cron-Users (`crontab -e`, **nicht**
-`sudo crontab -e`) oder als `/etc/cron.d/`-Datei mit explizitem
-User-Feld:
-
-```
-*/5 * * * * /pfad/zu/smsammad/cron_run.sh sms-to-ticket
-*/5 * * * * /pfad/zu/smsammad/cron_run.sh ticket-to-sms
-0 7 * * *   /pfad/zu/smsammad/cron_run.sh balance-check
-0 8 * * 1   /pfad/zu/smsammad/cron_run.sh stats
-0 6 * * *   /pfad/zu/smsammad/cron_run.sh check-setup
-```
-
-Die letzte Zeile ist **optional** (nur sinnvoll bei `[zammad]
-self_manage_setup = true`, siehe
-[check-setup](#optional-check-setup----die-schritte-oben-automatisch-prüfenreparieren))
-und **bewusst ohne `--fix`**: rein beobachtend, meldet Config-Drift oder
-eine nachträglich in Zammad geänderte Gruppen-/Trigger-Struktur per
-Fehlermail, verändert aber nichts automatisch im laufenden Betrieb --
-`--fix` bleibt eine bewusste, manuelle Aktion
-(`./cron_run.sh check-setup --fix` bzw. `python3 run.py check-setup
---fix`). Wer das anders möchte, kann `--fix` natürlich auch in die
-Cron-Zeile aufnehmen (`cron_run.sh check-setup --fix` -- **wichtig**:
-`--fix` muss bei `cron_run.sh` wie bei `run.py` selbst NACH dem
-Subcommand stehen, `cron_run.sh` reicht Argumente entsprechend durch).
-
-`cron_run.sh` **niemals** manuell mit `sudo`/als root aufrufen (auch nicht
-zum Testen) — sonst gehören Log-/Lock-Dateien danach root, und der normale
-Cron-User scheitert anschließend mit "Permission denied" (live passiert:
-ein manueller Testlauf mit `sudo` hat eine root-eigene Lock-Datei
-hinterlassen, an der der reguläre Cron-Lauf danach scheiterte).
-
-`cron_run.sh` verhindert überlappende Läufe (`flock`, Lock-Datei bewusst
-unter `/var/log/smsammad/`, **nicht** `/tmp` — aus genau dem
-oben beschriebenen root-Owner-Grund), loggt immer nach
-`/var/log/smsammad/<task>.log` und ist bei Erfolg still (kein
-Cron-Mail-Spam) — bei Fehlern (Exit-Code != 0) geht die Ausgabe zusätzlich
-auf stderr, damit crons eigenes `MAILTO` (falls lokaler Mailversand
-eingerichtet ist) als zweite, grobe Absicherung neben der App-eigenen
-Fehlermail (`config.ini`: `[notification]`) greift — die App-Mail liefert
-präzisere Details, kann aber z.B. bei einer kaputten `config.ini` selbst
-nicht mehr greifen.
-
-## Sicherheitshinweise
-
-- `config.ini` **immer** `600`, niemals gruppen-/weltlesbar (aktiv
-  geprüft beim Start).
-- Bei einem Mehrbenutzer-Setup (z.B. dedizierter Cron-User): gemeinsam
-  genutzte Projektverzeichnisse per Gruppenrechte + Setgid-Bit teilen,
-  `config.ini` dabei **explizit** von der Gruppenfreigabe ausnehmen
-  (`chmod 600` bleibt bestehen, auch wenn der Rest des Verzeichnisses
-  `664`/`774` bekommt).
-- Log-Inhalte: Rufnummern bleiben lesbar (notwendig fürs Debugging),
-  SMS-/Ticket-**Inhalte** werden maskiert (s.
-  [Content-Redaction](#content-redaction-im-log)).
-- Bei einem Leak von Router- oder SMTP-Zugangsdaten (z.B. versehentlich in
-  einem Log/einer Konsolenausgabe sichtbar geworden): zeitnah rotieren.
-
-## Test
-
-```bash
-pytest
-```
-
-Tests laufen komplett gegen Fakes/eine echte temporäre SQLite-Datei (kein
-Netzwerkzugriff nötig, `responses` mockt die Zammad-HTTP-Aufrufe). Echte
-Verifikation gegen den realen Router/die reale Zammad-Instanz erfolgt
-zusätzlich manuell vor jeder als "fertig" markierten Änderung (siehe
-Commit-/Entwicklungshistorie) — Dry-Run zuerst, danach ein bewusster
-einzelner echter Lauf.
+</details>
 
 ## Lizenz
 
