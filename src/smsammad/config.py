@@ -148,7 +148,13 @@ class BalanceConfig:
     # abweichender Installation ueberschrieben werden.
     closed_state_id: int = 4
     # -- method = "ussd" --
-    ussd_code: str = "*100#"
+    # Direkter Guthaben-Kurzcode statt des Menue-Codes "*100#": "*106#"
+    # antwortet abgeschlossen (+CUSD-Feld <m> = 0), laesst also KEINE
+    # USSD-Sitzung offen. "*100#" oeffnet dagegen ein interaktives Menue
+    # und laesst die Sitzung offen (<m> = 1) -- eine kurz darauf folgende
+    # Abfrage landet dann als Menue-Eingabe in dieser Sitzung ("Ungueltige
+    # Eingabe" statt Guthaben, live beobachtet, siehe balance_check).
+    ussd_code: str = "*106#"
     # Eigener, fuer die RutOS-REST-API berechtigter Account (NICHT der
     # cgi-bin-SMS-Account -- live verifiziert: der hat auf /api/... keinen
     # Zugriff, 401/403).
@@ -165,7 +171,12 @@ class BalanceConfig:
     # Komma als Dezimaltrenner, z.B. "25,77"); re.IGNORECASE wird immer
     # angewendet. In der config.ini aenderbar, ohne den Code anzufassen,
     # falls der Provider den Antworttext aendert.
-    ussd_balance_regex: str = r"Aktuelles Guthaben:\s*(\d+(?:,\d+)?)\s*EUR"
+    # Deckt beide live beobachteten Wortlaute ab: "Aktuelles Guthaben:
+    # 12,26 EUR" (Menue-Code "*100#") und "Kontostand: 12,26 EUR"
+    # (Kurzcode "*106#") -- bewusst nur auf "Guthaben"/"Kontostand"
+    # verankert, damit ein geaenderter Zusatztext davor nichts kaputt
+    # macht.
+    ussd_balance_regex: str = r"(?:Guthaben|Kontostand):\s*(\d+(?:,\d+)?)\s*EUR"
     sms_balance_regex: str = r"Guthaben\s+betr[äa]gt\s+(\d+(?:,\d+)?)\s*Euro"
 
 

@@ -299,6 +299,58 @@ def test_ussd_method_creates_ticket_and_records_balance(tmp_path):
     assert budget.should_query_balance(interval_hours=24)
 
 
+def test_default_ussd_regex_matches_both_live_provider_wordings():
+    """Kurzcode "*106#" antwortet mit "Kontostand: ...", der Menue-Code
+    "*100#" mit "Aktuelles Guthaben: ..." -- der Default-Regex muss beide
+    erfassen, damit ein Wechsel des ussd_code nichts kaputt macht."""
+    regex = BalanceConfig(warn_threshold_eur=5.0, alarm_threshold_eur=1.0).ussd_balance_regex
+
+    assert balance_check._parse_ussd_balance("Kontostand: 12,26 EUR", regex) == 12.26
+    assert balance_check._parse_ussd_balance("Aktuelles Guthaben: 25,77 EUR", regex) == 25.77
+
+
+def test_parse_ussd_mode_reads_session_indicator():
+    """RutOS stellt der +CUSD-Antwort einen Zeitstempel voran; danach folgt
+    <m>: 0 = abgeschlossen, 1 = Sitzung bleibt offen."""
+    assert balance_check._parse_ussd_mode("2026-09-03 15:14:59 0,Kontostand: 12,26 EUR,15\n") == 0
+    assert balance_check._parse_ussd_mode("2026-09-03 15:06:36 1,Ungültige Eingabe.,15\n") == 1
+    assert balance_check._parse_ussd_mode("voellig anderes Format") is None
+
+
+def test_ussd_open_session_gives_explanatory_error_instead_of_parse_error(tmp_path):
+    """Kein Betrag UND <m>=1: der Code landete als Menue-Eingabe in einer
+    noch offenen USSD-Sitzung. Statt eines nichtssagenden "Betrag nicht
+    erkennbar" muss die Meldung den Sachverhalt benennen -- sie landet als
+    Fehlermail beim Betreiber (live genau so passiert)."""
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+    config = _config(tmp_path, balance=_ussd_only())
+    open_session_response = (
+        "2026-09-03 15:06:36 1,Ungültige Eingabe.\r\nWähl bitte aus:\r\n1 Aufladen,15\n"
+    )
+
+    with patch("smsammad.balance_check.TeltonikaApiClient") as api_cls:
+        api_cls.return_value.send_ussd.return_value = open_session_response
+        with pytest.raises(ValueError, match="Sitzung ist noch offen"):
+            balance_check.run(
+                FakeTeltonika(), FakeZammad(), config, dry_run=False, budget=budget
+            )
+
+
+def test_ussd_unparseable_without_open_session_keeps_plain_error(tmp_path):
+    """Gegenprobe: ohne offene Sitzung (<m>=0) bleibt es bei der
+    bisherigen, schlichten Meldung -- die Sonderbehandlung darf nicht
+    jeden Parse-Fehler vereinnahmen."""
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+    config = _config(tmp_path, balance=_ussd_only())
+
+    with patch("smsammad.balance_check.TeltonikaApiClient") as api_cls:
+        api_cls.return_value.send_ussd.return_value = "2026-09-03 15:14:59 0,Werbetext,15\n"
+        with pytest.raises(ValueError, match="Betrag nicht erkennbar"):
+            balance_check.run(
+                FakeTeltonika(), FakeZammad(), config, dry_run=False, budget=budget
+            )
+
+
 def test_ussd_method_unparseable_response_raises_and_falls_back_when_configured(tmp_path):
     teltonika = FakeTeltonika()
     zammad = FakeZammad()

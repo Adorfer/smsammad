@@ -67,6 +67,21 @@ def _cleanup_ussd_text(text: str) -> str:
     return text
 
 
+# RutOS stellt der eigentlichen +CUSD-Antwort einen Zeitstempel voran:
+# "<Datum> <Uhrzeit> <m>,<text>,<dcs>". <m> ist das 3GPP-Feld
+# "USSD response indicator": 0 = abgeschlossen, 1 = "further action
+# required", d.h. die USSD-Sitzung bleibt offen und erwartet eine
+# Menue-Eingabe.
+_USSD_MODE_RE = re.compile(r"^\S+ \S+ (\d+),")
+
+_USSD_SESSION_OPEN = 1
+
+
+def _parse_ussd_mode(text: str) -> int | None:
+    match = _USSD_MODE_RE.match(text)
+    return int(match.group(1)) if match else None
+
+
 def _parse_ussd_balance(text: str, pattern: str) -> float | None:
     # Provider-spezifisch (hier: Vodafone Callya) -- die genaue Formulierung
     # der USSD-Menue-Antwort kann sich jederzeit aendern (Werbetexte etc.).
@@ -100,6 +115,23 @@ def _run_ussd(
 
     amount_eur = _parse_ussd_balance(response_text, balance_config.ussd_balance_regex)
     if amount_eur is None:
+        if _parse_ussd_mode(response_text) == _USSD_SESSION_OPEN:
+            # Kein Betrag, aber die Sitzung bleibt offen: der Code wurde
+            # nicht als neue Anwahl, sondern als Menue-Eingabe in eine noch
+            # laufende USSD-Sitzung interpretiert (Netz antwortet dann z.B.
+            # mit "Ungueltige Eingabe" + Menue). Bewusst KEIN automatischer
+            # Wiederholversuch: ein erneutes Senden geht wieder in dieselbe
+            # offene Sitzung und haelt sie zusaetzlich am Leben -- live so
+            # beobachtet (drei Fehlversuche in Folge ueber mehrere Minuten).
+            raise ValueError(
+                "USSD-Antwort enthaelt keinen Betrag, und die USSD-Sitzung ist noch offen "
+                "(m=1): der Code wurde als Eingabe in eine bereits laufende Sitzung "
+                f"interpretiert statt als neue Anwahl. Aktueller ussd_code: "
+                f"{balance_config.ussd_code!r}. Menue-Codes wie '*100#' lassen die Sitzung "
+                "offen und loesen das bei kurz aufeinanderfolgenden Abfragen aus; ein "
+                "direkter Kurzcode wie '*106#' antwortet abgeschlossen (m=0) und vermeidet "
+                f"es. Antwort war: {response_text!r}"
+            )
         raise ValueError(f"USSD-Antwort: Betrag nicht erkennbar: {response_text!r}")
 
     # Bewusst KEIN budget.mark_balance_queried() hier: USSD ist synchron/

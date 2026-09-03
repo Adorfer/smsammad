@@ -158,6 +158,35 @@ User for Token` beobachtet), SMSammad parst das deshalb selbst,
 quote-bewusst: ein `#` **innerhalb** der Anführungszeichen (z.B. Teil
 eines Passworts) wird nicht als Kommentaranfang missverstanden.
 
+### Router-Zugangsdaten: zwei verschiedene, unabhängige Konten
+
+Der RUT240 hat **zwei völlig getrennte HTTP-Schnittstellen** mit jeweils
+eigenem Credential-Speicher — deshalb stehen in der `config.ini` zwei
+verschiedene Router-Logins, die sich gegenseitig **nicht** vertreten
+können:
+
+| Config | Schnittstelle | Wofür | Herkunft im Router-WebUI |
+|---|---|---|---|
+| `[teltonika]`<br>`username`/`password` | altes **cgi-bin-SMS-Gateway** (`/cgi-bin/sms_*`, Klartext-Antworten, Credentials als Query-Parameter) | **alles rund um SMS**: Versand, Empfang, Lesen, Löschen, Speicherstand | Services → Mobile Utilities → **SMS Gateway → Post/Get** (Menüpfad je nach RutOS-Version leicht abweichend): dort „Post/Get" aktivieren und Username/Passwort setzen |
+| `[balance]`<br>`api_username`/`api_password` | moderne **RutOS-REST-API** (`/api/...`, JSON, Bearer-Token-Login) | **nur die USSD-Guthabenabfrage** (`method = "ussd"`) | System → Administration → **Users**: echtes Benutzerkonto anlegen, dann explizit Zugriff auf **Network → Mobile** geben |
+
+Wichtig zum Verständnis:
+
+- Das cgi-bin-Login ist **kein Benutzerkonto** — es existiert in der
+  Benutzerverwaltung des Routers überhaupt nicht, sondern nur in der
+  SMS-Gateway-Konfiguration. Ein `/api/login` damit scheitert live
+  reproduzierbar mit `HTTP 401`.
+- Umgekehrt hilft das REST-API-Konto nicht beim SMS-Versand: die
+  cgi-bin-Endpunkte kennen keinen Bearer-Token.
+- Der Name `api_username` ist historisch etwas unglücklich — beides sind
+  streng genommen APIs. Die eigentliche Trennlinie ist
+  „cgi-bin-SMS-Gateway" vs. „REST-API": **USSD gibt es nur auf der
+  REST-API, SMS nur auf cgi-bin.** Details zur Herleitung siehe
+  [Warum USSD ueber eine eigene REST-API](#warum-ussd-ueber-eine-eigene-rest-api-statt-ubusgsmctl).
+- Wird `[balance] method = "sms"` genutzt, braucht es die
+  REST-API-Zugangsdaten gar nicht — die Abfrage läuft dann als normale
+  SMS über die cgi-bin-Credentials.
+
 </details>
 
 <details>
@@ -569,22 +598,50 @@ USSD-Fehler trotzdem ganz normal durchgereicht (nicht stillschweigend
 ### `method = "ussd"` (Default)
 
 Synchron per RutOS-REST-API (`teltonika_api.py`): sendet den USSD-Code
-(Default `*100#`) an `/api/modems/<modem_id>/actions/send_ussd`, wertet
+(Default `*106#`) an `/api/modems/<modem_id>/actions/send_ussd`, wertet
 die Antwort **im selben Lauf** aus (kein Warten auf eine Antwort-SMS
 nötig), i.d.R. kostenlos. Details/Herleitung dieses Wegs siehe
 [Warum USSD ueber eine eigene REST-API](#warum-ussd-ueber-eine-eigene-rest-api-statt-ubusgsmctl).
+
+**Warum `*106#` und nicht `*100#`**: Beide liefern das Guthaben, aber
+`*100#` öffnet bei Vodafone das **interaktive Menü** und lässt die
+USSD-Sitzung offen — erkennbar am `<m>`-Feld der Antwort
+(`<Zeitstempel> <m>,<text>,<dcs>`), das dann `1` ist („further action
+required"). Eine kurz darauf folgende Abfrage wird dann nicht als neue
+Anwahl, sondern als **Menü-Eingabe in die noch laufende Sitzung**
+interpretiert; `*100#` ist dort keine gültige Auswahl, das Netz
+antwortet mit „Ungültige Eingabe" plus Menü — und ohne Guthabenzeile,
+also ohne parsebaren Betrag. Jeder weitere Versuch hält die Sitzung
+zusätzlich am Leben (live über mehrere Minuten so beobachtet); erst
+nach Ruhe läuft sie ab.
+
+`*106#` ist dagegen der direkte Guthaben-Kurzcode: die Antwort ist
+abgeschlossen (`<m> = 0`), lässt **keine Sitzung offen**, ist kürzer
+(`Kontostand: 12,26 EUR`) und enthält nebenbei **keine Umlaute** — der
+unten beschriebene Zeichensatz-Bug greift damit gar nicht erst.
+
+Im täglichen Cron-Betrieb fällt der Unterschied nicht auf (Sitzungen
+laufen nach Minuten ab), bei manuellen Aufrufen kurz hintereinander
+sehr wohl. Tritt der Fall trotzdem auf, bricht `balance-check` mit einer
+Meldung ab, die den Sachverhalt benennt (statt nur „Betrag nicht
+erkennbar"). Ein automatischer Wiederholversuch findet **bewusst nicht**
+statt: erneutes Senden ginge wieder in dieselbe offene Sitzung und
+würde sie nur verlängern.
 
 Braucht einen **eigenen, dedizierten Router-Account** mit Zugriff auf die
 Mobile/USSD-API -- live verifiziert, dass der bestehende cgi-bin-
 SMS-Account (`[teltonika]`) dort **keinen** Zugriff hat (`401` beim
 Login). Einrichtung am Router:
 
-1. WebUI → System → Administration → Users → neuen User anlegen
-   (Username/Passwort → `api_username`/`api_password` in `config.ini`).
-2. Dem User explizit Zugriff auf **Network → Mobile** geben (ohne diese
-   Berechtigung gelingt zwar der Login, aber die eigentliche
-   USSD-Aktion liefert `403 Unauthorized` -- live so beobachtet, bis die
-   Berechtigung ergänzt wurde).
+1. WebUI → System → Administration → **User Settings** → Reiter
+   **System Users** → neuen User anlegen (Username/Passwort →
+   `api_username`/`api_password` in `config.ini`).
+2. Der User gehört einer **Gruppe** an (z.B. `user`) — die Rechte hängen
+   an dieser Gruppe, nicht am einzelnen Benutzer: Groups → Edit →
+   *Write access* und *Read access* müssen **`network/mobile/general`**
+   enthalten. Ohne diese Berechtigung gelingt zwar der Login, aber die
+   eigentliche USSD-Aktion liefert `403 Unauthorized` (live so
+   beobachtet, bis die Berechtigung ergänzt wurde).
 3. `modem_id` prüfen: sichtbar in der Router-WebUI-URL unter
    Network → Mobile → General (Format `network/mobile/general/<id>`)
    bzw. im dort ausgelösten `/api/modems/<modem_id>/...`-Request
@@ -592,8 +649,16 @@ Login). Einrichtung am Router:
    die meisten Single-SIM-Geräte.
 
 Der Betrag wird aus der USSD-Antwort per Regex geparst -- konfigurierbar
-über `ussd_balance_regex` in `config.ini` (Default zugeschnitten auf das
-Menü-Format von Vodafone Callya, z.B. `"Aktuelles Guthaben: 25,77 EUR"`).
+über `ussd_balance_regex` in `config.ini`. Der Default deckt **beide**
+live beobachteten Vodafone-Callya-Wortlaute ab, `"Kontostand: 12,26 EUR"`
+(Kurzcode `*106#`) und `"Aktuelles Guthaben: 25,77 EUR"` (Menü-Code
+`*100#`), und verankert bewusst nur an `Guthaben`/`Kontostand`, damit
+geänderter Text davor nichts kaputt macht.
+
+**Achtung beim Umstellen einer bestehenden Installation**: Stehen
+`ussd_code`/`ussd_balance_regex` in deiner `config.ini` **explizit**
+drin, überschreiben sie die Defaults — beide müssen dann dort gemeinsam
+angepasst werden, sonst wird der neue Antwortwortlaut nicht erkannt.
 
 **Bekannte kosmetische Macke**: die rohe USSD-Antwort landet unverändert
 als öffentlicher Artikel im Ticket, inkl. `&amp;`-artiger HTML-Entities

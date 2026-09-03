@@ -18,7 +18,37 @@
 ; Ein '#' INNERHALB der Anfuehrungszeichen (z.B. Teil eines Passworts wie
 ; "gEh middle#eim") wird NICHT als Kommentaranfang missverstanden.
 
+[notification]
+; Fehlerbenachrichtigung per Mail bei unbehandelten Exceptions.
+; Abschnitt komplett weglassen, um Fehlermails dauerhaft zu deaktivieren.
+smtp_host = "mail.example.local"
+smtp_port = 587
+smtp_user = "smsammad@example.local"
+smtp_password = "CHANGEME"
+recipient = "ops@example.local"
+; Schalter zum temporaeren Deaktivieren, ohne obige Werte zu loeschen/
+; auskommentieren zu muessen. Bei --dry-run wird ohnehin unabhaengig
+; von diesem Wert nie eine Mail verschickt.
+enabled = true
+
 [teltonika]
+; Zugang zum SMS-Gateway des Routers ueber dessen cgi-bin-Schnittstelle
+; (/cgi-bin/sms_send, sms_list, sms_read, sms_delete, sms_total) -- also
+; ALLES rund um SMS-Versand und -Empfang.
+;
+; WICHTIG: username/password hier sind NICHT das Router-Admin-Login und
+; auch kein Benutzerkonto aus System -> Administration -> Users, sondern
+; ein eigenes, feature-spezifisches Login-Paar aus der SMS-Gateway-
+; Konfiguration des Routers (RutOS 7.x: Services -> Mobile Utilities ->
+; SMS Gateway -> Post/Get; Menuepfad je nach Firmware-Version leicht
+; abweichend). Dort "Post/Get" aktivieren und Username/Passwort setzen.
+;
+; Deshalb braucht die Guthaben-Abfrage per USSD ein ZWEITES, davon
+; unabhaengiges Konto (s. [balance] api_username/api_password): sie laeuft
+; ueber die moderne RutOS-REST-API (/api/...), und dieses cgi-bin-Login
+; existiert in der Benutzerverwaltung ueberhaupt nicht -- ein /api/login
+; damit scheitert live reproduzierbar mit HTTP 401.
+;
 ; IP oder Hostname des Routers, ohne Schema
 host = "192.168.1.1"
 username = "user1"
@@ -58,6 +88,139 @@ unresolved_sender_prefix = "Kurzwahl:"
 retry_max_attempts = 3
 retry_first_delay_seconds = 20
 retry_delay_seconds = 180
+
+[balance]
+; Prepaid-Guthaben-Ueberwachung der SIM-Karte im Router (optional -- Sektion
+; komplett weglassen, um dieses Feature zu deaktivieren). Der
+; 'balance-check'-Subcommand fragt taeglich das Guthaben ab.
+;
+; method = "ussd" (Default): synchron per RutOS-REST-API (/api/...),
+;   Ergebnis liegt sofort vor, i.d.R. kostenlos. Braucht einen EIGENEN
+;   Router-Account mit Zugriff auf die Mobile/USSD-API -- der cgi-bin-
+;   SMS-Account (s. [teltonika]) hat dort KEINE Berechtigung (live
+;   verifiziert: 401/403). Account im Router-WebUI anlegen (System ->
+;   Administration -> Users) und dort explizit Zugriff auf Network ->
+;   Mobile geben.
+; method = "sms": Abfrage-SMS an eine Kurzwahl, Antwort trifft asynchron
+;   ein und wird vom naechsten sms-to-ticket-Lauf ausgewertet (erkannt am
+;   Absender reply_sender).
+;
+; Ist die jeweils andere Methode ZUSAETZLICH vollstaendig konfiguriert,
+; schaltet balance-check bei einem Fehler der Default-Methode (Zugriff
+; verweigert oder Antwort nicht parsebar) fuer diesen Lauf automatisch auf
+; die andere um. Ohne konfigurierte Fallback-Methode wird der Fehler ganz
+; normal per Fehlermail gemeldet.
+method = "ussd"
+
+; -- method = "ussd" --
+; USSD-Code fuer die Guthaben-Abfrage.
+; "*106#" (Default) ist bei Vodafone der DIREKTE Guthaben-Kurzcode: die
+; Antwort ist abgeschlossen (+CUSD-Feld <m> = 0), es bleibt KEINE
+; USSD-Sitzung offen, und die Antwort enthaelt weder Menue noch Umlaute.
+; "*100#" oeffnet dagegen das interaktive Menue und laesst die Sitzung
+; offen (<m> = 1) -- eine kurz darauf folgende Abfrage wird dann als
+; MENUE-EINGABE in diese laufende Sitzung interpretiert und liefert
+; "Ungueltige Eingabe" statt eines Guthabens (live beobachtet). Im
+; taeglichen Cron-Betrieb faellt das nicht auf (Sitzungen laufen nach
+; Minuten ab), bei manuellen Aufrufen kurz hintereinander schon.
+ussd_code = "*106#"
+; Zugangsdaten des dedizierten Mobile-API-Accounts (siehe oben): ein
+; echtes Router-Benutzerkonto aus System -> Administration -> Users, mit
+; explizit gesetztem Zugriff auf Network -> Mobile.
+;
+; Zum Namen "api_": beide Wege sind streng genommen APIs -- gemeint ist
+; hier die moderne RutOS-REST-API (/api/..., JSON, Bearer-Token-Login),
+; im Unterschied zum alten cgi-bin-SMS-Gateway aus [teltonika]
+; (Klartext-Antworten, Credentials als Query-Parameter). USSD gibt es
+; ausschliesslich auf der REST-API, SMS ausschliesslich auf cgi-bin --
+; daher die zwei getrennten Zugaenge.
+api_username = "smsammad"
+api_password = "CHANGEME"
+; Modem-ID wie in der Router-WebUI-URL/API sichtbar (i.d.R. "1-1")
+modem_id = "1-1"
+
+; -- method = "sms" --
+; Kurzwahl, an die die Abfrage-SMS geschickt wird
+query_number = "111"
+; Text der Abfrage-SMS
+query_text = "Guthaben"
+; Erwarteter Absender der Antwort-SMS (Anbieter-spezifisch, hier Vodafone)
+reply_sender = "80808"
+
+; -- gemeinsam --
+; Schwellenwerte in Euro: >= warn_threshold_eur = ok (Ticket wird
+; geschlossen), zwischen alarm_threshold_eur und warn_threshold_eur = Ticket
+; bleibt offen mit erhoehter Prioritaet, < alarm_threshold_eur = Ticket
+; bleibt offen mit hoechster Prioritaet UND jede SMS-Versand-Notiz bekommt
+; zusaetzlich einen Warnhinweis
+warn_threshold_eur = 5.00
+alarm_threshold_eur = 1.00
+; Mindestabstand zwischen zwei Abfragen in Stunden -- gilt NUR fuer die
+; SMS-Methode (kostet eine echte SMS). USSD ist synchron/kostenlos und
+; wird NIE gegen dieses Zeitfenster geprueft, egal ob als method="ussd"
+; oder als Fallback nach einem fehlgeschlagenen SMS-Versuch.
+query_interval_hours = 24
+; Zammad state_id fuer "closed" -- Standard-Zammad-Installationen nutzen 4,
+; bei Abweichungen ueber 'GET /api/v1/ticket_states' pruefen
+closed_state_id = 4
+; Regex zum Erkennen des Guthaben-Betrags in der USSD- bzw. SMS-Antwort,
+; GENAU EINE Erfassungsgruppe '(...)' fuer den Betrag (deutsches Komma als
+; Dezimaltrenner, z.B. "25,77"). Gross-/Kleinschreibung wird ignoriert.
+; Aendert der Provider den Antworttext (z.B. neue Werbeformulierung), reicht
+; es, hier den Regex anzupassen -- kein Code-Deploy noetig. Defaults passen
+; zum aktuellen Vodafone-Callya-Wortlaut.
+; Der USSD-Default deckt bewusst BEIDE live beobachteten Wortlaute ab --
+; "Kontostand: 12,26 EUR" (Kurzcode "*106#") und "Aktuelles Guthaben:
+; 25,77 EUR" (Menue-Code "*100#") -- und verankert nur an
+; "Guthaben"/"Kontostand", damit geaenderter Text davor nichts kaputt macht.
+ussd_balance_regex = "(?:Guthaben|Kontostand):\s*(\d+(?:,\d+)?)\s*EUR"
+sms_balance_regex = "Guthaben\s+betr[äa]gt\s+(\d+(?:,\d+)?)\s*Euro"
+
+[ticket_to_sms]
+; "multipart" (Default): der GESAMTE Text geht in EINEM Request an den
+;             Router, der die echte SMS-Verkettung uebernimmt -- Empfaenger
+;             sieht EINE Nachricht. Bis zur sicheren AWS/Twilio-Grenze fuer
+;             Concatenated SMS (153 GSM-7-Septets/67 UCS-2-Codeeinheiten
+;             pro Segment, siehe README).
+; "classic"   -- eigenes Aufteilen in mehrere eigenstaendige Einzel-SMS mit
+;             "(N/M) "-Praefix (bisheriges Verhalten), jede Nachricht ein
+;             eigener API-Aufruf, kein Reassembly durch den Router.
+send_mode = "multipart"
+; Anzahl SMS-Sende-Einheiten ("Credits"), die eine Nachricht maximal
+; kosten darf, bevor on_overflow greift. Im "classic"-Modus: Anzahl
+; separater Einzel-SMS (kein Deckel -- jeder Wert wirkt).
+; Im "multipart"-Modus: Anzahl echter Netz-Segmente, das ergibt ein
+; Zeichen-Budget von max_sms_parts * 153 (GSM-7) bzw. max_sms_parts * 67
+; (UCS-2) -- ABER gedeckelt durch die harte AWS/Twilio-Obergrenze von 1530
+; GSM-7-/630 UCS-2-Zeichen (siehe README). Effektives MAXIMUM ist daher
+; max_sms_parts = 10 -- ab da ist die harte Obergrenze in JEDEM Encoding
+; bereits erreicht (10*153=1530, 10*67=670>630), hoehere Werte aendern im
+; Multipart-Modus nichts mehr.
+max_sms_parts = 3
+; Verhalten bei Ueberlauf (> max_sms_parts):
+; "reject"   -- gar nicht senden, Fehler-Notiz, Tag sms-overflow, Prioritaet
+;               hoch (overflow_priority) -- Agent muss den Text kuerzen.
+; "truncate" -- die ersten max_sms_parts Teile/Segmente trotzdem senden,
+;               Notiz weist auf die Kuerzung hin und zeigt den tatsaechlich
+;               gesendeten (gekuerzten) Text.
+on_overflow = "reject"
+; SMS-Sende-Budget (rollierende Fenster), gilt pro tatsaechlich versendeter
+; SMS. Mehrteiler zaehlen mehrfach -- in BEIDEN Modi: im "classic"-Modus
+; je separat versendeter Einzel-SMS, im "multipart"-Modus je tatsaechlich
+; benoetigtem Netz-Segment (intern berechnet, siehe send_mode oben), auch
+; wenn dabei nur EIN API-Aufruf stattfindet. Bei Ueberschreitung wird das
+; jeweilige Ticket zurueckgestellt (Tag sms-out bleibt stehen) und im
+; naechsten Lauf erneut versucht.
+max_sms_per_hour = 20
+max_sms_per_24h = 100
+; SQLite-Datenbank fuer Budget-Zaehler UND Statistik (Zeitpunkt/Richtung/
+; Gruppe/Agent je SMS) -- muss fuer den Cron-User beschreibbar sein. Wird
+; sowohl fuer die Rate-Limit-Pruefung als auch fuer den 'stats'-Subcommand
+; und die Gruppe/Agent-Aufschluesselung in der Budget-Warn-Mail benutzt.
+stats_db_file = "~/.local/state/smsammad/stats.db"
+; Mindestabstand zwischen zwei Budget-Ueberschreitungs-Mails, um bei mehreren
+; Cronlaeufen in Folge nicht jedes Mal erneut zu mailen
+budget_notify_cooldown_minutes = 60
 
 [zammad]
 ; Basis-URL der Zammad-Instanz, ohne /api/v1
@@ -110,127 +273,3 @@ open_state_id = 2
 ; sich Zammads Trigger-/Berechtigungs-API in einem Update aendert).
 self_manage_setup = false
 
-[ticket_to_sms]
-; "multipart" (Default): der GESAMTE Text geht in EINEM Request an den
-;             Router, der die echte SMS-Verkettung uebernimmt -- Empfaenger
-;             sieht EINE Nachricht. Bis zur sicheren AWS/Twilio-Grenze fuer
-;             Concatenated SMS (153 GSM-7-Septets/67 UCS-2-Codeeinheiten
-;             pro Segment, siehe README).
-; "classic"   -- eigenes Aufteilen in mehrere eigenstaendige Einzel-SMS mit
-;             "(N/M) "-Praefix (bisheriges Verhalten), jede Nachricht ein
-;             eigener API-Aufruf, kein Reassembly durch den Router.
-send_mode = "multipart"
-; Anzahl SMS-Sende-Einheiten ("Credits"), die eine Nachricht maximal
-; kosten darf, bevor on_overflow greift. Im "classic"-Modus: Anzahl
-; separater Einzel-SMS (kein Deckel -- jeder Wert wirkt).
-; Im "multipart"-Modus: Anzahl echter Netz-Segmente, das ergibt ein
-; Zeichen-Budget von max_sms_parts * 153 (GSM-7) bzw. max_sms_parts * 67
-; (UCS-2) -- ABER gedeckelt durch die harte AWS/Twilio-Obergrenze von 1530
-; GSM-7-/630 UCS-2-Zeichen (siehe README). Effektives MAXIMUM ist daher
-; max_sms_parts = 10 -- ab da ist die harte Obergrenze in JEDEM Encoding
-; bereits erreicht (10*153=1530, 10*67=670>630), hoehere Werte aendern im
-; Multipart-Modus nichts mehr.
-max_sms_parts = 3
-; Verhalten bei Ueberlauf (> max_sms_parts):
-; "reject"   -- gar nicht senden, Fehler-Notiz, Tag sms-overflow, Prioritaet
-;               hoch (overflow_priority) -- Agent muss den Text kuerzen.
-; "truncate" -- die ersten max_sms_parts Teile/Segmente trotzdem senden,
-;               Notiz weist auf die Kuerzung hin und zeigt den tatsaechlich
-;               gesendeten (gekuerzten) Text.
-on_overflow = "reject"
-; SMS-Sende-Budget (rollierende Fenster), gilt pro tatsaechlich versendeter
-; SMS. Mehrteiler zaehlen mehrfach -- in BEIDEN Modi: im "classic"-Modus
-; je separat versendeter Einzel-SMS, im "multipart"-Modus je tatsaechlich
-; benoetigtem Netz-Segment (intern berechnet, siehe send_mode oben), auch
-; wenn dabei nur EIN API-Aufruf stattfindet. Bei Ueberschreitung wird das
-; jeweilige Ticket zurueckgestellt (Tag sms-out bleibt stehen) und im
-; naechsten Lauf erneut versucht.
-max_sms_per_hour = 20
-max_sms_per_24h = 100
-; SQLite-Datenbank fuer Budget-Zaehler UND Statistik (Zeitpunkt/Richtung/
-; Gruppe/Agent je SMS) -- muss fuer den Cron-User beschreibbar sein. Wird
-; sowohl fuer die Rate-Limit-Pruefung als auch fuer den 'stats'-Subcommand
-; und die Gruppe/Agent-Aufschluesselung in der Budget-Warn-Mail benutzt.
-stats_db_file = "~/.local/state/smsammad/stats.db"
-; Mindestabstand zwischen zwei Budget-Ueberschreitungs-Mails, um bei mehreren
-; Cronlaeufen in Folge nicht jedes Mal erneut zu mailen
-budget_notify_cooldown_minutes = 60
-
-[balance]
-; Prepaid-Guthaben-Ueberwachung der SIM-Karte im Router (optional -- Sektion
-; komplett weglassen, um dieses Feature zu deaktivieren). Der
-; 'balance-check'-Subcommand fragt taeglich das Guthaben ab.
-;
-; method = "ussd" (Default): synchron per RutOS-REST-API (/api/...),
-;   Ergebnis liegt sofort vor, i.d.R. kostenlos. Braucht einen EIGENEN
-;   Router-Account mit Zugriff auf die Mobile/USSD-API -- der cgi-bin-
-;   SMS-Account (s. [teltonika]) hat dort KEINE Berechtigung (live
-;   verifiziert: 401/403). Account im Router-WebUI anlegen (System ->
-;   Administration -> Users) und dort explizit Zugriff auf Network ->
-;   Mobile geben.
-; method = "sms": Abfrage-SMS an eine Kurzwahl, Antwort trifft asynchron
-;   ein und wird vom naechsten sms-to-ticket-Lauf ausgewertet (erkannt am
-;   Absender reply_sender).
-;
-; Ist die jeweils andere Methode ZUSAETZLICH vollstaendig konfiguriert,
-; schaltet balance-check bei einem Fehler der Default-Methode (Zugriff
-; verweigert oder Antwort nicht parsebar) fuer diesen Lauf automatisch auf
-; die andere um. Ohne konfigurierte Fallback-Methode wird der Fehler ganz
-; normal per Fehlermail gemeldet.
-method = "ussd"
-
-; -- method = "ussd" --
-; USSD-Code fuer die Guthaben-Abfrage
-ussd_code = "*100#"
-; Zugangsdaten des dedizierten Mobile-API-Accounts (siehe oben)
-api_username = "smsammad"
-api_password = "CHANGEME"
-; Modem-ID wie in der Router-WebUI-URL/API sichtbar (i.d.R. "1-1")
-modem_id = "1-1"
-
-; -- method = "sms" --
-; Kurzwahl, an die die Abfrage-SMS geschickt wird
-query_number = "111"
-; Text der Abfrage-SMS
-query_text = "Guthaben"
-; Erwarteter Absender der Antwort-SMS (Anbieter-spezifisch, hier Vodafone)
-reply_sender = "80808"
-
-; -- gemeinsam --
-; Schwellenwerte in Euro: >= warn_threshold_eur = ok (Ticket wird
-; geschlossen), zwischen alarm_threshold_eur und warn_threshold_eur = Ticket
-; bleibt offen mit erhoehter Prioritaet, < alarm_threshold_eur = Ticket
-; bleibt offen mit hoechster Prioritaet UND jede SMS-Versand-Notiz bekommt
-; zusaetzlich einen Warnhinweis
-warn_threshold_eur = 5.00
-alarm_threshold_eur = 1.00
-; Mindestabstand zwischen zwei Abfragen in Stunden -- gilt NUR fuer die
-; SMS-Methode (kostet eine echte SMS). USSD ist synchron/kostenlos und
-; wird NIE gegen dieses Zeitfenster geprueft, egal ob als method="ussd"
-; oder als Fallback nach einem fehlgeschlagenen SMS-Versuch.
-query_interval_hours = 24
-; Zammad state_id fuer "closed" -- Standard-Zammad-Installationen nutzen 4,
-; bei Abweichungen ueber 'GET /api/v1/ticket_states' pruefen
-closed_state_id = 4
-; Regex zum Erkennen des Guthaben-Betrags in der USSD- bzw. SMS-Antwort,
-; GENAU EINE Erfassungsgruppe '(...)' fuer den Betrag (deutsches Komma als
-; Dezimaltrenner, z.B. "25,77"). Gross-/Kleinschreibung wird ignoriert.
-; Aendert der Provider den Antworttext (z.B. neue Werbeformulierung), reicht
-; es, hier den Regex anzupassen -- kein Code-Deploy noetig. Defaults passen
-; zum aktuellen Vodafone-Callya-Wortlaut ("Aktuelles Guthaben: 25,77 EUR"
-; bzw. "Guthaben betraegt 0,98 Euro").
-ussd_balance_regex = "Aktuelles Guthaben:\s*(\d+(?:,\d+)?)\s*EUR"
-sms_balance_regex = "Guthaben\s+betr[äa]gt\s+(\d+(?:,\d+)?)\s*Euro"
-
-[notification]
-; Fehlerbenachrichtigung per Mail bei unbehandelten Exceptions.
-; Abschnitt komplett weglassen, um Fehlermails dauerhaft zu deaktivieren.
-smtp_host = "mail.example.local"
-smtp_port = 587
-smtp_user = "smsammad@example.local"
-smtp_password = "CHANGEME"
-recipient = "ops@example.local"
-; Schalter zum temporaeren Deaktivieren, ohne obige Werte zu loeschen/
-; auskommentieren zu muessen. Bei --dry-run wird ohnehin unabhaengig
-; von diesem Wert nie eine Mail verschickt.
-enabled = true
