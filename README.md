@@ -1057,6 +1057,31 @@ Live gegen ein echtes RUT240 verifiziert (siehe `teltonika.py`):
   Versand landet stattdessen wie gehabt über `sms-cannotsend` sichtbar
   beim Agenten (siehe
   [SMS-Versand-Verhalten](#sms-versand-verhalten)).
+- **Schutz vor Teltonikas fail2ban bei falschen Zugangsdaten**
+  (`access_guard.py`): Der Router sperrt eine IP nach 20 Fehlversuchen
+  innerhalb 24h dauerhaft. Bei einem 5-Minuten-Cron summiert sich ein
+  falsches Passwort ungebremst zu weit über 20 Fehlversuchen in unter
+  einer Stunde -- live genau so provoziert (Passwort-Rotation, danach
+  ein Dutzend Fehlermails in kurzer Folge). Deshalb eigenständig von
+  `retry_max_attempts` (das ist für Router-Überlastung gedacht, siehe
+  oben, würde einen Auth-Fehler nur unnötig vervielfachen -- daher
+  bewusst ausgenommen, siehe `TeltonikaAuthError`/`TeltonikaApiAuthError`):
+  - Getrennter Zustand pro Zugang (`"cgi"` fürs SMS-Gateway, `"api"` für
+    REST-API/USSD) in derselben SQLite-Datei wie das SMS-Budget.
+  - Erster Fehlversuch (HTTP 401 bzw. 401/403) → EIN Wiederholversuch
+    nach kurzer Wartezeit. Scheitert auch der zweite: Zugang für diesen
+    und alle folgenden Läufe gesperrt (kein weiterer Router-Kontakt,
+    kein weiterer Beitrag zum fail2ban-Zähler), **genau eine** Mail.
+  - Wiederversuch frühestens nach 4h, bei erneutem Fehlschlag 8h, danach
+    gedeckelt bei 24h.
+  - Erfolg nach vorherigem Fehler: Zustand zurückgesetzt, **genau eine**
+    Entwarnungsmail. Während der Sperre übersprungene Läufe bekommen
+    **keine** weitere Mail -- kein Mail-Spam bei jedem Cron-Lauf, aber
+    auch kein stilles Dauerversagen ohne jede Benachrichtigung.
+  - Bei `balance-check` mit konfiguriertem Fallback: eine Sperre des
+    `"api"`-Zugangs löst wie jeder andere USSD-Fehler den bestehenden
+    SMS-Fallback aus (die Sperr-Mail geht trotzdem raus, der Lauf selbst
+    gilt aber als erfolgreich, wenn der Fallback klappt).
 
 ### Credential-Sicherheit beim Teltonika-Zugriff
 

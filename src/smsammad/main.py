@@ -21,7 +21,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import balance_check, setup_check, sms_to_ticket, stats_report, ticket_to_sms
+from . import access_guard, balance_check, setup_check, sms_to_ticket, stats_report, ticket_to_sms
 from .config import Config, ConfigError, load_config
 from .logging_setup import setup_logging
 from .notify import send_mail
@@ -140,6 +140,17 @@ def main() -> None:
         except Exception:
             logger.exception("Fehlerbenachrichtigung per Mail konnte nicht verschickt werden")
         sys.exit(1)
+    except access_guard.AccessBlocked as exc:
+        # access_guard.py hat die Benachrichtigung schon selbst uebernommen
+        # (Mail nur beim Auslösen der Sperre, nicht bei jedem
+        # uebersprungenen Lauf waehrend der Sperre) -- hier bewusst KEINE
+        # weitere Mail, sonst Doppel-Mail bzw. Mail-Spam bei jedem
+        # uebersprungenen Cron-Lauf.
+        if exc.just_entered:
+            logger.error("%s", exc)
+            sys.exit(1)
+        logger.info("%s", exc)
+        sys.exit(0)
     except Exception as exc:
         logger.exception("%s fehlgeschlagen", args.command)
         try:

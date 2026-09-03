@@ -35,6 +35,16 @@ CREATE TABLE IF NOT EXISTS balance_history (
     balance_eur REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_balance_history_ts ON balance_history(ts);
+
+-- Schutz gegen Teltonikas fail2ban-Mechanismus (20 Fehlversuche/24h ->
+-- dauerhafter Block), siehe access_guard.py. Ein Datensatz pro Zugang
+-- ('cgi' fuer das SMS-Gateway, 'api' fuer die REST-API/USSD) existiert
+-- NUR waehrend/nach einer Sperre -- Erfolg loescht die Zeile wieder.
+CREATE TABLE IF NOT EXISTS access_state (
+    scope TEXT PRIMARY KEY,
+    block_level INTEGER NOT NULL DEFAULT 0,
+    blocked_until TEXT
+);
 """
 
 
@@ -241,6 +251,62 @@ class SmsBudget:
         if row is None:
             return True
         return now - datetime.fromisoformat(row[0]) >= timedelta(hours=interval_hours)
+
+    def access_blocked_until(self, scope: str, now: datetime | None = None) -> datetime | None:
+        """None, wenn `scope` aktuell frei ist (kein Eintrag, oder eine
+        Sperre ist bereits abgelaufen -- dann bewusst NICHT geloescht, das
+        macht record_access_failure()/record_access_success() beim
+        naechsten tatsaechlichen Zugriffsversuch, sonst wuerde der
+        block_level fuer die Cooldown-Progression schon durch reines
+        Nachschauen verloren gehen)."""
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT blocked_until FROM access_state WHERE scope = ?", (scope,)
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        blocked_until = datetime.fromisoformat(row[0])
+        return blocked_until if blocked_until > now else None
+
+    def record_access_failure(
+        self,
+        scope: str,
+        stages_hours: tuple[int, ...] = (4, 8, 24),
+        now: datetime | None = None,
+    ) -> datetime:
+        """Zugang `scope` sperren (bzw. die Sperre verlaengern, falls schon
+        gesperrt) -- Cooldown eskaliert ueber `stages_hours`, gedeckelt bei
+        deren letztem Wert. Liefert den neuen blocked_until-Zeitpunkt."""
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT block_level FROM access_state WHERE scope = ?", (scope,)
+            ).fetchone()
+            level = (row[0] if row else 0) + 1
+            delay_hours = stages_hours[min(level - 1, len(stages_hours) - 1)]
+            blocked_until = now + timedelta(hours=delay_hours)
+            conn.execute(
+                "INSERT INTO access_state (scope, block_level, blocked_until) VALUES (?, ?, ?) "
+                "ON CONFLICT(scope) DO UPDATE SET "
+                "block_level = excluded.block_level, blocked_until = excluded.blocked_until",
+                (scope, level, blocked_until.isoformat()),
+            )
+        return blocked_until
+
+    def record_access_success(self, scope: str) -> bool:
+        """Zugang `scope` wieder frei -- Sperr-Zustand loeschen. Liefert
+        True, wenn zuvor tatsaechlich ein Fehlerzustand bestand (fuer die
+        Entwarnungsmail in access_guard.py), sonst False (ganz normaler
+        Erfolg ohne vorherigen Fehler -- der haeufige Fall)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT block_level FROM access_state WHERE scope = ?", (scope,)
+            ).fetchone()
+            had_failure = row is not None and row[0] > 0
+            if row is not None:
+                conn.execute("DELETE FROM access_state WHERE scope = ?", (scope,))
+        return had_failure
 
     def mark_balance_queried(self, now: datetime | None = None) -> None:
         """Nur nach einer tatsaechlich gesendeten SMS-Guthabenabfrage

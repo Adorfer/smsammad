@@ -39,6 +39,13 @@ class TeltonikaApiError(Exception):
     pass
 
 
+class TeltonikaApiAuthError(TeltonikaApiError):
+    """Falsche Zugangsdaten (401 beim Login) oder fehlende Berechtigung
+    fuer die USSD-Aktion (403, Login gelingt, aber Network->Mobile-Recht
+    fehlt) -- eigener Typ, damit access_guard.py das gezielt von anderen
+    Fehlern (Timeout, unerwartete Antwort, ...) unterscheiden kann."""
+
+
 class TeltonikaApiClient:
     def __init__(
         self,
@@ -68,6 +75,8 @@ class TeltonikaApiClient:
             )
         except requests.RequestException as exc:
             raise TeltonikaApiError(f"Login fehlgeschlagen: {type(exc).__name__}") from None
+        if response.status_code in (401, 403):
+            raise TeltonikaApiAuthError(f"Login fehlgeschlagen: HTTP {response.status_code}")
         if response.status_code != 200:
             raise TeltonikaApiError(f"Login fehlgeschlagen: HTTP {response.status_code}")
         try:
@@ -91,6 +100,8 @@ class TeltonikaApiClient:
             )
         except requests.RequestException as exc:
             raise TeltonikaApiError(f"USSD-Versand fehlgeschlagen: {type(exc).__name__}") from None
+        if response.status_code in (401, 403):
+            raise TeltonikaApiAuthError(f"USSD-Versand fehlgeschlagen: HTTP {response.status_code}")
         if response.status_code != 200:
             raise TeltonikaApiError(f"USSD-Versand fehlgeschlagen: HTTP {response.status_code}")
         try:

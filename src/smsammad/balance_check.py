@@ -20,16 +20,17 @@ import html
 import logging
 import re
 
-from . import balance_ticket
+from . import access_guard, balance_ticket
+from .access_guard import AccessBlocked
 from .config import Config
 from .sms_budget import SmsBudget
-from .teltonika import TeltonikaClient, TeltonikaError
-from .teltonika_api import TeltonikaApiClient, TeltonikaApiError
+from .teltonika import TeltonikaAuthError, TeltonikaClient, TeltonikaError
+from .teltonika_api import TeltonikaApiAuthError, TeltonikaApiClient, TeltonikaApiError
 from .zammad import ZammadClient
 
 logger = logging.getLogger("smsammad")
 
-_FALLBACK_TRIGGERS = (TeltonikaError, TeltonikaApiError, ValueError)
+_FALLBACK_TRIGGERS = (TeltonikaError, TeltonikaApiError, ValueError, AccessBlocked)
 
 # Live beobachteter RutOS-Firmware-Bug beim USSD-Decoding: das erste Byte
 # einer UTF-8-Mehrbyte-Sequenz (0xC3, Beginn aller deutschen Umlaute/ß)
@@ -110,7 +111,14 @@ def _run_ussd(
         return
 
     api = TeltonikaApiClient(config.teltonika.host, balance_config, verify_tls=config.teltonika.verify_tls)
-    response_text = api.send_ussd(balance_config.ussd_code)  # -> TeltonikaApiError bei Zugriffsfehlern
+    response_text = access_guard.guarded_call(
+        budget,
+        "api",
+        (TeltonikaApiAuthError,),
+        config.notification,
+        "USSD-Guthabenabfrage",
+        lambda: api.send_ussd(balance_config.ussd_code),
+    )
     response_text = _cleanup_ussd_text(response_text)
 
     amount_eur = _parse_ussd_balance(response_text, balance_config.ussd_balance_regex)
@@ -158,7 +166,14 @@ def _run_sms(
         )
         return
 
-    teltonika.send(balance_config.query_number, balance_config.query_text)  # -> TeltonikaError bei Fehlern
+    access_guard.guarded_call(
+        budget,
+        "cgi",
+        (TeltonikaAuthError,),
+        config.notification,
+        "Guthaben-Abfrage-SMS senden",
+        lambda: teltonika.send(balance_config.query_number, balance_config.query_text),
+    )
     budget.mark_balance_queried()
     logger.info("balance-check: Guthaben-Abfrage-SMS an %r gesendet", balance_config.query_number)
 

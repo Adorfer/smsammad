@@ -244,3 +244,64 @@ def test_should_query_balance_true_after_interval_elapsed(tmp_path):
     long_ago = datetime.now(timezone.utc) - timedelta(hours=25)
     budget.mark_balance_queried(now=long_ago)
     assert budget.should_query_balance(interval_hours=24)
+
+
+def test_access_blocked_until_none_when_never_failed(tmp_path):
+    budget = _budget(tmp_path)
+    assert budget.access_blocked_until("cgi") is None
+
+
+def test_record_access_failure_blocks_for_first_stage(tmp_path):
+    budget = _budget(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    blocked_until = budget.record_access_failure("cgi", now=now)
+    assert blocked_until == now + timedelta(hours=4)
+    assert budget.access_blocked_until("cgi", now=now) == blocked_until
+
+
+def test_record_access_failure_escalates_to_next_stage(tmp_path):
+    budget = _budget(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    budget.record_access_failure("cgi", now=now)
+    later = now + timedelta(hours=5)  # nach Ablauf der ersten Sperre
+    blocked_until = budget.record_access_failure("cgi", now=later)
+    assert blocked_until == later + timedelta(hours=8)
+
+
+def test_record_access_failure_caps_at_last_stage(tmp_path):
+    budget = _budget(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    budget.record_access_failure("cgi", now=now)  # level 1 -> 4h
+    budget.record_access_failure("cgi", now=now)  # level 2 -> 8h
+    budget.record_access_failure("cgi", now=now)  # level 3 -> 24h
+    blocked_until = budget.record_access_failure("cgi", now=now)  # level 4 -> gedeckelt bei 24h
+    assert blocked_until == now + timedelta(hours=24)
+
+
+def test_access_blocked_until_none_after_block_expires(tmp_path):
+    budget = _budget(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    budget.record_access_failure("cgi", now=now)
+    later = now + timedelta(hours=5)
+    assert budget.access_blocked_until("cgi", now=later) is None
+
+
+def test_access_state_is_independent_per_scope(tmp_path):
+    budget = _budget(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    budget.record_access_failure("cgi", now=now)
+    assert budget.access_blocked_until("api", now=now) is None
+
+
+def test_record_access_success_resets_state_and_signals_recovery(tmp_path):
+    budget = _budget(tmp_path)
+    budget.record_access_failure("cgi")
+    assert budget.record_access_success("cgi") is True
+    assert budget.access_blocked_until("cgi") is None
+    # zweiter Erfolg ohne vorherigen Fehler -- keine erneute "Erholung"
+    assert budget.record_access_success("cgi") is False
+
+
+def test_record_access_success_false_when_never_failed(tmp_path):
+    budget = _budget(tmp_path)
+    assert budget.record_access_success("cgi") is False

@@ -4,6 +4,7 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 
+from . import access_guard
 from .config import Config, TeltonikaConfig
 from .htmltext import html_to_text
 from .logging_setup import redact_content
@@ -18,7 +19,7 @@ from .sms_encoding import (
     encoding_cost,
 )
 from .sms_split import split_for_sms, truncate_to_cost
-from .teltonika import TeltonikaClient, TeltonikaError
+from .teltonika import TeltonikaAuthError, TeltonikaClient, TeltonikaError
 from .zammad import ZammadClient
 
 logger = logging.getLogger("smsammad")
@@ -60,6 +61,13 @@ def run(
     for ticket_id in ticket_ids:
         try:
             _process_one(ticket_id, zammad, teltonika, config, dry_run, budget, budget_blocked)
+        except access_guard.AccessBlocked:
+            # Sofort abbrechen statt als Ticket-Einzelfehler zu zaehlen:
+            # ein Auth-/Sperr-Problem betrifft ALLE folgenden Tickets
+            # gleichermassen -- weiterzumachen wuerde nur unnoetige
+            # Zugriffsversuche gegen die (bereits gesperrte) Gegenstelle
+            # produzieren, statt den Lauf sauber zu beenden.
+            raise
         except Exception:
             failures += 1
             logger.exception("ticket_to_sms: Verarbeitung von Ticket %s fehlgeschlagen", ticket_id)
@@ -516,8 +524,14 @@ def _send(
         return
 
     try:
-        for part in parts:
-            teltonika.send(number, part)
+        access_guard.guarded_call(
+            budget,
+            "cgi",
+            (TeltonikaAuthError,),
+            config.notification,
+            "SMS senden",
+            lambda: [teltonika.send(number, part) for part in parts],
+        )
     except TeltonikaError as exc:
         _handle_send_failed(
             ticket_id, ticket_number, current_state_id, current_title, exc, zammad, config

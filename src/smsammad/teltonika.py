@@ -42,6 +42,14 @@ class TeltonikaError(Exception):
     pass
 
 
+class TeltonikaAuthError(TeltonikaError):
+    """Falsche Zugangsdaten fuer das cgi-bin-SMS-Gateway (HTTP 401, live
+    beobachteter Body: "Bad username or password") -- eigener Typ statt
+    generischem TeltonikaError, damit access_guard.py das gezielt von
+    anderen Fehlern (Timeout, Router ueberlastet, ...) unterscheiden
+    kann, ohne den Antworttext zu parsen."""
+
+
 @dataclass
 class SmsMessage:
     index: int
@@ -95,6 +103,14 @@ class TeltonikaClient:
     def _auth_params(self) -> dict[str, str]:
         return {"username": self._config.username, "password": self._config.password}
 
+    def _raise_for_status(self, endpoint: str, response: requests.Response) -> None:
+        if response.status_code == 401:
+            raise TeltonikaAuthError(f"{endpoint} lieferte HTTP 401: {response.text!r}")
+        if response.status_code != 200:
+            raise TeltonikaError(
+                f"{endpoint} lieferte HTTP {response.status_code}: {response.text!r}"
+            )
+
     def _get_once(self, endpoint: str, **params: str) -> requests.Response:
         # Absichtlich ohne "raise ... from exc": die Original-Exception (und
         # jede Kette bis zu urllib3) enthaelt die volle URL inkl.
@@ -112,10 +128,7 @@ class TeltonikaClient:
             raise TeltonikaError(
                 f"Anfrage an {endpoint} fehlgeschlagen: {type(exc).__name__}"
             ) from None
-        if response.status_code != 200:
-            raise TeltonikaError(
-                f"{endpoint} lieferte HTTP {response.status_code}: {response.text!r}"
-            )
+        self._raise_for_status(endpoint, response)
         return response
 
     def _get(self, endpoint: str, **params: str) -> requests.Response:
@@ -127,11 +140,20 @@ class TeltonikaClient:
         einem clientseitigen Timeout koennte eine tatsaechlich schon
         versendete SMS ein zweites Mal verschicken (live genau so
         beobachtet, siehe README).
+
+        TeltonikaAuthError wird bewusst NICHT hier mitgefangen/wiederholt:
+        das ist kein transientes Ueberlastungssymptom, ein erneuter
+        Versuch mit denselben (falschen) Zugangsdaten wuerde nur unnoetig
+        zusaetzliche Fehlversuche gegen Teltonikas fail2ban-Zaehler
+        erzeugen (siehe access_guard.py, das genau EINEN eigenen,
+        separaten Wiederholversuch macht, bevor der Zugang gesperrt wird).
         """
         max_attempts = self._config.retry_max_attempts + 1
         for attempt in range(1, max_attempts + 1):
             try:
                 response = self._get_once(endpoint, **params)
+            except TeltonikaAuthError:
+                raise
             except TeltonikaError as exc:
                 error: Exception = exc
             else:
@@ -179,10 +201,7 @@ class TeltonikaClient:
             raise TeltonikaError(
                 f"Anfrage an {endpoint} fehlgeschlagen: {type(exc).__name__}"
             ) from None
-        if response.status_code != 200:
-            raise TeltonikaError(
-                f"{endpoint} lieferte HTTP {response.status_code}: {response.text!r}"
-            )
+        self._raise_for_status(endpoint, response)
         return response
 
     def send(self, number: str, text: str) -> None:

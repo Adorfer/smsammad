@@ -3,13 +3,13 @@
 import logging
 import re
 
-from . import balance_ticket
+from . import access_guard, balance_ticket
 from .config import Config
 from .htmltext import html_to_text
 from .logging_setup import redact_content
 from .phone import PhoneNumberError, to_e164
 from .sms_budget import SmsBudget
-from .teltonika import TeltonikaClient
+from .teltonika import TeltonikaAuthError, TeltonikaClient
 from .zammad import ZammadClient, ZammadError
 
 logger = logging.getLogger("smsammad")
@@ -74,14 +74,21 @@ def run(
     dry_run: bool = False,
     budget: SmsBudget | None = None,
 ) -> None:
-    messages = teltonika.list_messages()
-    logger.info("sms_to_ticket: %d SMS auf dem Router", len(messages))
-
     budget = budget or SmsBudget(
         config.ticket_to_sms.stats_db_file,
         config.ticket_to_sms.max_sms_per_hour,
         config.ticket_to_sms.max_sms_per_24h,
     )
+
+    messages = access_guard.guarded_call(
+        budget,
+        "cgi",
+        (TeltonikaAuthError,),
+        config.notification,
+        "SMS abrufen",
+        teltonika.list_messages,
+    )
+    logger.info("sms_to_ticket: %d SMS auf dem Router", len(messages))
 
     failures = 0
     for message in messages:

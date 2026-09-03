@@ -14,7 +14,7 @@ from smsammad.config import (
 )
 from smsammad.sms_budget import SmsBudget
 from smsammad.teltonika import TeltonikaError
-from smsammad.teltonika_api import TeltonikaApiError
+from smsammad.teltonika_api import TeltonikaApiAuthError, TeltonikaApiError
 
 
 class FakeTeltonika:
@@ -376,6 +376,26 @@ def test_ussd_method_access_denied_falls_back_when_configured(tmp_path):
         balance_check.run(teltonika, zammad, config, dry_run=False, budget=budget)
 
     assert teltonika.sent == [("111", "Guthaben")]
+
+
+def test_ussd_repeated_auth_failure_blocks_api_scope_and_falls_back(tmp_path):
+    """Zwei aufeinanderfolgende 401/403 (typisiert als TeltonikaApiAuthError,
+    nicht nur textuell) muessen ueber access_guard den 'api'-Zugang
+    sperren -- der Lauf faengt sich trotzdem ueber den bestehenden
+    SMS-Fallback ab (AccessBlocked ist Teil von _FALLBACK_TRIGGERS)."""
+    teltonika = FakeTeltonika()
+    zammad = FakeZammad()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+    config = _config(tmp_path, balance=_both_configured(method="ussd"))
+
+    with patch("smsammad.access_guard.time.sleep"):
+        with patch("smsammad.balance_check.TeltonikaApiClient") as api_cls:
+            api_cls.return_value.send_ussd.side_effect = TeltonikaApiAuthError("HTTP 403")
+            balance_check.run(teltonika, zammad, config, dry_run=False, budget=budget)
+
+    assert api_cls.return_value.send_ussd.call_count == 2  # ein Wiederholversuch
+    assert teltonika.sent == [("111", "Guthaben")]  # Fallback hat trotzdem funktioniert
+    assert budget.access_blocked_until("api") is not None
 
 
 def test_repeated_ussd_queries_are_never_throttled(tmp_path):

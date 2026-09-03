@@ -1,8 +1,10 @@
 import codecs
+from unittest.mock import patch
 
 import pytest
 
 from smsammad import sms_to_ticket
+from smsammad.access_guard import AccessBlocked
 from smsammad.config import (
     BalanceConfig,
     Config,
@@ -11,16 +13,22 @@ from smsammad.config import (
     ZammadConfig,
 )
 from smsammad.sms_to_ticket import _resolve_sender_id, _subject_excerpt
-from smsammad.teltonika import SmsMessage
+from smsammad.sms_budget import SmsBudget
+from smsammad.teltonika import SmsMessage, TeltonikaAuthError
 from smsammad.zammad import ZammadError
 
 
 class FakeTeltonika:
-    def __init__(self, messages):
+    def __init__(self, messages, list_messages_raises=None):
         self._messages = messages
         self.deleted = []
+        self._list_messages_raises = list_messages_raises
+        self.list_messages_calls = 0
 
     def list_messages(self):
+        self.list_messages_calls += 1
+        if self._list_messages_raises is not None:
+            raise self._list_messages_raises
         return self._messages
 
     def delete(self, index):
@@ -108,6 +116,15 @@ class FakeBudget:
 
     def record_balance(self, amount_eur, now=None):
         self.balances.append(amount_eur)
+
+    def access_blocked_until(self, scope, now=None):
+        return None
+
+    def record_access_failure(self, scope, stages_hours=(4, 8, 24), now=None):
+        raise AssertionError("Test simuliert keinen Access-Guard-Fehlerfall")
+
+    def record_access_success(self, scope):
+        return False
 
 
 def _config(
@@ -320,6 +337,24 @@ def test_dry_run_deletes_nothing():
 
     assert zammad.created_tickets == []
     assert teltonika.deleted == []
+
+
+def test_repeated_auth_failure_blocks_via_access_guard(tmp_path):
+    """Ende-zu-Ende: zwei aufeinanderfolgende HTTP-401-Fehler beim
+    Abrufen der SMS-Liste muessen ueber access_guard.guarded_call in
+    eine AccessBlocked-Ausnahme muenden (nicht in eine rohe
+    TeltonikaAuthError durchschlagen) und den 'cgi'-Zugang sperren."""
+    teltonika = FakeTeltonika([], list_messages_raises=TeltonikaAuthError("401"))
+    zammad = FakeZammad()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+
+    with patch("smsammad.access_guard.time.sleep"):
+        with pytest.raises(AccessBlocked) as excinfo:
+            sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=budget)
+
+    assert teltonika.list_messages_calls == 2  # ein Wiederholversuch, dann Abbruch
+    assert excinfo.value.just_entered is True
+    assert budget.access_blocked_until("cgi") is not None
 
 
 def test_dry_run_logs_last_ticket_group_when_enabled(caplog):

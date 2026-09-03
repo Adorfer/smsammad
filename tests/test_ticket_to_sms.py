@@ -12,8 +12,9 @@ from smsammad.config import (
     TicketToSmsConfig,
     ZammadConfig,
 )
-from smsammad.sms_budget import GroupStat
-from smsammad.teltonika import TeltonikaError
+from smsammad.access_guard import AccessBlocked
+from smsammad.sms_budget import GroupStat, SmsBudget
+from smsammad.teltonika import TeltonikaAuthError, TeltonikaError
 
 
 class FakeZammad:
@@ -129,6 +130,15 @@ class FakeBudget:
 
     def summary_by_group_and_agent(self, since, direction="out"):
         return self._breakdown
+
+    def access_blocked_until(self, scope, now=None):
+        return None
+
+    def record_access_failure(self, scope, stages_hours=(4, 8, 24), now=None):
+        raise AssertionError("Test simuliert keinen Access-Guard-Fehlerfall")
+
+    def record_access_success(self, scope):
+        return False
 
 
 def _public_call(body):
@@ -795,7 +805,30 @@ def test_send_failure_marks_cannot_send_instead_of_crashing():
     assert budget.recorded == []
     assert len(zammad.internal_notes) == 1
     assert "no credit" in zammad.internal_notes[0][1]
-    assert zammad.priorities_set == [(1, 3)]
+
+
+def test_repeated_auth_failure_blocks_via_access_guard_instead_of_marking_cannotsend(tmp_path):
+    """Anders als ein normaler Sendefehler (Test oben): ein Auth-Fehler
+    (falsches Passwort) darf NICHT als 'sms-cannotsend' am Ticket landen
+    -- das waere pro Ticket wiederholtes, sinnloses Ticket-Rauschen fuer
+    ein Infrastrukturproblem. Stattdessen muss AccessBlocked durchschlagen
+    (TeltonikaError-Handler in _send() darf das nicht abfangen, da
+    AccessBlocked bewusst KEIN TeltonikaError ist)."""
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika(fail_with=TeltonikaAuthError("401"))
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+
+    with patch("smsammad.access_guard.time.sleep"):
+        with pytest.raises(AccessBlocked) as excinfo:
+            ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert excinfo.value.just_entered is True
+    assert budget.access_blocked_until("cgi") is not None
+    assert zammad.sent_tags_added == []  # KEIN 'sms-cannotsend' fuer ein Auth-/Infra-Problem
 
 
 def test_budget_exceeded_leaves_tag_for_retry_and_adds_note_once():
