@@ -252,38 +252,74 @@ class SmsBudget:
             return True
         return now - datetime.fromisoformat(row[0]) >= timedelta(hours=interval_hours)
 
-    def access_blocked_until(self, scope: str, now: datetime | None = None) -> datetime | None:
+    # Fingerprint der Zugangsdaten, mit denen eine Sperre ausgeloest wurde,
+    # liegt bewusst in der meta-Tabelle (kein ALTER an der frisch deployten
+    # access_state-Tabelle). Wird IMMER in derselben Transaktion wie die
+    # Sperre selbst geschrieben/geloescht -> beide Tabellen bleiben
+    # konsistent.
+    @staticmethod
+    def _fp_key(scope: str) -> str:
+        return f"access_fingerprint_{scope}"
+
+    def access_blocked_until(
+        self, scope: str, credential_fingerprint: str | None = None, now: datetime | None = None
+    ) -> datetime | None:
         """None, wenn `scope` aktuell frei ist (kein Eintrag, oder eine
         Sperre ist bereits abgelaufen -- dann bewusst NICHT geloescht, das
         macht record_access_failure()/record_access_success() beim
         naechsten tatsaechlichen Zugriffsversuch, sonst wuerde der
         block_level fuer die Cooldown-Progression schon durch reines
-        Nachschauen verloren gehen)."""
+        Nachschauen verloren gehen).
+
+        `credential_fingerprint`: wurde die Sperre mit ANDEREN Zugangsdaten
+        ausgeloest als den jetzt konfigurierten (Fingerprint stimmt nicht
+        ueberein), gilt sie nicht mehr -> None. So hebt eine Korrektur der
+        Zugangsdaten in der config.ini die Sperre automatisch auf, ohne
+        dass man die Restlaufzeit (bis 24h) abwarten muss."""
         now = now or datetime.now(timezone.utc)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT blocked_until FROM access_state WHERE scope = ?", (scope,)
             ).fetchone()
-        if row is None or row[0] is None:
-            return None
+            if row is None or row[0] is None:
+                return None
+            if credential_fingerprint is not None:
+                fp_row = conn.execute(
+                    "SELECT value FROM meta WHERE key = ?", (self._fp_key(scope),)
+                ).fetchone()
+                if fp_row is not None and fp_row[0] != credential_fingerprint:
+                    return None
         blocked_until = datetime.fromisoformat(row[0])
         return blocked_until if blocked_until > now else None
 
     def record_access_failure(
         self,
         scope: str,
+        credential_fingerprint: str | None = None,
         stages_hours: tuple[int, ...] = (4, 8, 24),
         now: datetime | None = None,
     ) -> datetime:
         """Zugang `scope` sperren (bzw. die Sperre verlaengern, falls schon
         gesperrt) -- Cooldown eskaliert ueber `stages_hours`, gedeckelt bei
-        deren letztem Wert. Liefert den neuen blocked_until-Zeitpunkt."""
+        deren letztem Wert. Liefert den neuen blocked_until-Zeitpunkt.
+
+        Aendern sich die Zugangsdaten (Fingerprint weicht vom gespeicherten
+        ab), beginnt die Eskalation bei Stufe 1 neu -- ein Fehler mit NEUEN
+        Zugangsdaten ist ein neues Problem, nicht die Fortsetzung des
+        alten."""
         now = now or datetime.now(timezone.utc)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT block_level FROM access_state WHERE scope = ?", (scope,)
             ).fetchone()
-            level = (row[0] if row else 0) + 1
+            base_level = row[0] if row else 0
+            if credential_fingerprint is not None:
+                fp_row = conn.execute(
+                    "SELECT value FROM meta WHERE key = ?", (self._fp_key(scope),)
+                ).fetchone()
+                if fp_row is not None and fp_row[0] != credential_fingerprint:
+                    base_level = 0  # andere Zugangsdaten -> Eskalation neu starten
+            level = base_level + 1
             delay_hours = stages_hours[min(level - 1, len(stages_hours) - 1)]
             blocked_until = now + timedelta(hours=delay_hours)
             conn.execute(
@@ -292,6 +328,12 @@ class SmsBudget:
                 "block_level = excluded.block_level, blocked_until = excluded.blocked_until",
                 (scope, level, blocked_until.isoformat()),
             )
+            if credential_fingerprint is not None:
+                conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._fp_key(scope), credential_fingerprint),
+                )
         return blocked_until
 
     def record_access_success(self, scope: str) -> bool:
@@ -306,6 +348,7 @@ class SmsBudget:
             had_failure = row is not None and row[0] > 0
             if row is not None:
                 conn.execute("DELETE FROM access_state WHERE scope = ?", (scope,))
+                conn.execute("DELETE FROM meta WHERE key = ?", (self._fp_key(scope),))
         return had_failure
 
     def mark_balance_queried(self, now: datetime | None = None) -> None:

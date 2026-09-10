@@ -1082,6 +1082,24 @@ Live gegen ein echtes RUT240 verifiziert (siehe `teltonika.py`):
     `"api"`-Zugangs löst wie jeder andere USSD-Fehler den bestehenden
     SMS-Fallback aus (die Sperr-Mail geht trotzdem raus, der Lauf selbst
     gilt aber als erfolgreich, wenn der Fallback klappt).
+  - **Korrigierte Zugangsdaten heben die Sperre sofort auf**: Mit der
+    Sperre wird ein nicht umkehrbarer Fingerprint der schuldigen
+    Zugangsdaten gespeichert (SHA-256, gekürzt -- kein Klartext). Stehen
+    in der `config.ini` inzwischen andere Zugangsdaten, gilt die Sperre
+    nicht mehr, und der nächste Lauf versucht es sofort erneut (weiterhin
+    mit max. einem Retry, also fail2ban-sicher). Man muss die Restlaufzeit
+    (bis 24h) also **nicht** abwarten, nachdem man das Passwort korrigiert
+    hat. Ein Fehlschlag mit den neuen Zugangsdaten startet die
+    Eskalation wieder bei 4h (neues Problem, nicht Fortsetzung des alten).
+  - **Dry-Run persistiert keinen Sperr-Zustand**: `sms-to-ticket
+    --dry-run` kontaktiert den Router real, würde aber bei falschen
+    Zugangsdaten sonst eine echte Sperre in die DB schreiben, deren Mail
+    im Dry-Run unterdrückt ist -- die produktiven Läufe wären danach
+    still ausgesperrt. Deshalb schreibt der Guard im Dry-Run keinen
+    Zustand und verschickt keine Mail; der Auth-Fehler schlägt stattdessen
+    sichtbar im Konsolen-Output durch. Eine **bereits bestehende**
+    (produktive) Sperre beachtet auch der Dry-Run -- er zeigt damit
+    korrekt, dass der echte Lauf übersprungen würde.
 
 ### Credential-Sicherheit beim Teltonika-Zugriff
 

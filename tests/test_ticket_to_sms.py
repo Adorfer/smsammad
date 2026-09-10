@@ -131,10 +131,12 @@ class FakeBudget:
     def summary_by_group_and_agent(self, since, direction="out"):
         return self._breakdown
 
-    def access_blocked_until(self, scope, now=None):
+    def access_blocked_until(self, scope, credential_fingerprint=None, now=None):
         return None
 
-    def record_access_failure(self, scope, stages_hours=(4, 8, 24), now=None):
+    def record_access_failure(
+        self, scope, credential_fingerprint=None, stages_hours=(4, 8, 24), now=None
+    ):
         raise AssertionError("Test simuliert keinen Access-Guard-Fehlerfall")
 
     def record_access_success(self, scope):

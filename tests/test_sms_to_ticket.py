@@ -117,10 +117,12 @@ class FakeBudget:
     def record_balance(self, amount_eur, now=None):
         self.balances.append(amount_eur)
 
-    def access_blocked_until(self, scope, now=None):
+    def access_blocked_until(self, scope, credential_fingerprint=None, now=None):
         return None
 
-    def record_access_failure(self, scope, stages_hours=(4, 8, 24), now=None):
+    def record_access_failure(
+        self, scope, credential_fingerprint=None, stages_hours=(4, 8, 24), now=None
+    ):
         raise AssertionError("Test simuliert keinen Access-Guard-Fehlerfall")
 
     def record_access_success(self, scope):
@@ -355,6 +357,36 @@ def test_repeated_auth_failure_blocks_via_access_guard(tmp_path):
     assert teltonika.list_messages_calls == 2  # ein Wiederholversuch, dann Abbruch
     assert excinfo.value.just_entered is True
     assert budget.access_blocked_until("cgi") is not None
+
+
+def test_corrected_credentials_lift_block_end_to_end(tmp_path):
+    """Ende-zu-Ende fuer den eigentlichen Nutzen des Fingerprints: nach
+    einer Sperre mit falschem Passwort laeuft ein Lauf mit KORRIGIERTEM
+    Passwort sofort wieder durch, ohne die Restlaufzeit (bis 24h)
+    abzuwarten."""
+    import dataclasses
+
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+
+    # 1) Sperre mit falschem Passwort provozieren.
+    bad_config = _config()  # username="u", password="p"
+    bad_teltonika = FakeTeltonika([], list_messages_raises=TeltonikaAuthError("401"))
+    with patch("smsammad.access_guard.time.sleep"):
+        with pytest.raises(AccessBlocked):
+            sms_to_ticket.run(bad_teltonika, FakeZammad(), bad_config, dry_run=False, budget=budget)
+    assert budget.access_blocked_until("cgi") is not None  # mit ALTEM Fingerprint gesperrt
+
+    # 2) Passwort korrigieren -> anderer Fingerprint -> Sperre gilt nicht mehr.
+    good_config = dataclasses.replace(
+        bad_config,
+        teltonika=dataclasses.replace(bad_config.teltonika, password="neu-und-richtig"),
+    )
+    good_teltonika = FakeTeltonika([])  # liefert jetzt sauber eine (leere) Liste
+    sms_to_ticket.run(good_teltonika, FakeZammad(), good_config, dry_run=False, budget=budget)
+
+    assert good_teltonika.list_messages_calls == 1  # kein Blockieren, echter Abruf
+    # Erfolg mit neuen Zugangsdaten raeumt den alten Sperr-Zustand auf.
+    assert budget.access_blocked_until("cgi", "irgendwas") is None
 
 
 def test_dry_run_logs_last_ticket_group_when_enabled(caplog):

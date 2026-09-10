@@ -531,6 +531,9 @@ def _send(
             config.notification,
             "SMS senden",
             lambda: [teltonika.send(number, part) for part in parts],
+            credential_fingerprint=access_guard.fingerprint(
+                config.teltonika.username, config.teltonika.password
+            ),
         )
     except TeltonikaError as exc:
         _handle_send_failed(

@@ -19,8 +19,17 @@ Verfahren, User-Wunsch:
   Entwarnungsmail. Waehrend der Sperre uebersprungene Laeufe bekommen
   KEINE weitere Mail (die ging schon beim Sperren raus) -- das ist der
   Kern gegen Mail-Spam bei jedem Cron-Lauf.
+- Wurde die Sperre mit falschen Zugangsdaten ausgeloest und diese danach
+  in der config.ini korrigiert, gilt die Sperre nicht mehr (Fingerprint-
+  Abgleich in SmsBudget.access_blocked_until) -- die Verarbeitung laeuft
+  sofort wieder an, ohne die Restlaufzeit abzuwarten.
+- Im Dry-Run wird KEIN Sperr-Zustand persistiert (record_access_failure/
+  _success uebersprungen) und keine Mail verschickt -- ein Test mit
+  falschen Zugangsdaten darf die produktiven Cron-Laeufe nicht
+  stillschweigend aussperren.
 """
 
+import hashlib
 import logging
 import time
 from typing import Callable, TypeVar
@@ -34,6 +43,16 @@ logger = logging.getLogger("smsammad")
 T = TypeVar("T")
 
 _RETRY_DELAY_SECONDS = 10
+
+
+def fingerprint(*parts: str) -> str:
+    """Stabiler, nicht umkehrbarer Fingerprint der Zugangsdaten -- landet
+    in der SQLite-DB, damit eine Korrektur der Zugangsdaten eine bestehende
+    Sperre automatisch aufhebt. Bewusst gehasht (kein Klartext), passend
+    zur uebrigen Credential-Sorgfalt des Projekts. '\\0' als Trenner, damit
+    ('a','bc') und ('ab','c') verschiedene Fingerprints ergeben."""
+    joined = "\0".join(parts).encode("utf-8")
+    return hashlib.sha256(joined).hexdigest()[:16]
 
 
 class AccessBlocked(Exception):
@@ -57,14 +76,26 @@ def guarded_call(
     notification: NotificationConfig | None,
     action_label: str,
     fn: Callable[[], T],
+    credential_fingerprint: str | None = None,
+    dry_run: bool = False,
 ) -> T:
     """Fuehrt `fn()` aus, geschuetzt gegen wiederholte Auth-Fehlversuche
     fuer `scope`. Wirft AccessBlocked statt `fn()` je gemaess obigem
     Verfahren aufzurufen, wenn der Zugang gerade gesperrt ist bzw. gerade
     erst gesperrt wurde. Andere Fehler (nicht in `auth_error_types`)
     werden unveraendert durchgereicht -- kein Einfluss auf den
-    Sperr-Zustand."""
-    blocked_until = budget.access_blocked_until(scope)
+    Sperr-Zustand.
+
+    `credential_fingerprint` (siehe access_guard.fingerprint): eine mit
+    ANDEREN Zugangsdaten gesetzte Sperre gilt nicht -> korrigierte
+    Zugangsdaten heben sie sofort auf.
+
+    `dry_run`: kein Schreiben von Sperr-Zustand, keine Mail -- ein Test mit
+    falschen Zugangsdaten darf die produktiven Laeufe nicht aussperren.
+    Eine BEREITS bestehende (produktive) Sperre wird trotzdem beachtet, der
+    Dry-Run zeigt damit korrekt, dass der echte Lauf uebersprungen wuerde.
+    """
+    blocked_until = budget.access_blocked_until(scope, credential_fingerprint)
     if blocked_until is not None:
         raise AccessBlocked(
             f"Zugang '{scope}' ({action_label}) weiterhin gesperrt bis "
@@ -85,7 +116,12 @@ def guarded_call(
         try:
             result = fn()
         except auth_error_types as exc2:
-            new_blocked_until = budget.record_access_failure(scope)
+            if dry_run:
+                # Kein Sperr-Zustand persistieren, keine Mail -- den echten
+                # Auth-Fehler stattdessen unveraendert nach oben geben,
+                # damit er im Dry-Run-Konsolen-Output klar sichtbar wird.
+                raise
+            new_blocked_until = budget.record_access_failure(scope, credential_fingerprint)
             message = (
                 f"Zugang '{scope}' ({action_label}) meldet wiederholt Zugriffsfehler:\n\n"
                 f"{exc2}\n\n"
@@ -99,16 +135,22 @@ def guarded_call(
             _try_send_mail(notification, f"SMSammad: Zugriff '{scope}' gesperrt", message)
             raise AccessBlocked(message, just_entered=True) from None
         else:
-            _maybe_notify_recovered(budget, scope, action_label, notification)
+            _maybe_notify_recovered(budget, scope, action_label, notification, dry_run)
             return result
     else:
-        _maybe_notify_recovered(budget, scope, action_label, notification)
+        _maybe_notify_recovered(budget, scope, action_label, notification, dry_run)
         return result
 
 
 def _maybe_notify_recovered(
-    budget: SmsBudget, scope: str, action_label: str, notification: NotificationConfig | None
+    budget: SmsBudget,
+    scope: str,
+    action_label: str,
+    notification: NotificationConfig | None,
+    dry_run: bool,
 ) -> None:
+    if dry_run:
+        return  # Dry-Run aendert keinen persistenten Zustand
     if budget.record_access_success(scope):
         _try_send_mail(
             notification,

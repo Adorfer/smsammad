@@ -87,6 +87,10 @@ def run(
         config.notification,
         "SMS abrufen",
         teltonika.list_messages,
+        credential_fingerprint=access_guard.fingerprint(
+            config.teltonika.username, config.teltonika.password
+        ),
+        dry_run=dry_run,
     )
     logger.info("sms_to_ticket: %d SMS auf dem Router", len(messages))
 

@@ -146,3 +146,104 @@ def test_scopes_are_independent(tmp_path):
 
     assert result == "ok"
     mail.assert_not_called()  # "api" hatte nie ein Problem, keine Entwarnungsmail noetig
+
+
+def _always_auth_fail():
+    def fn():
+        raise AuthError("401")
+    return fn
+
+
+def test_corrected_credentials_lift_block(tmp_path):
+    """Kernnutzen: eine mit Fingerprint A ausgeloeste Sperre darf einen
+    Aufruf mit Fingerprint B (korrigierte Zugangsdaten) NICHT blockieren."""
+    budget = _budget(tmp_path)
+    budget.record_access_failure("cgi", credential_fingerprint="A")
+
+    with patch("smsammad.access_guard.send_mail"):
+        result = guarded_call(
+            budget, "cgi", (AuthError,), _notification(), "Testaktion",
+            lambda: "ok", credential_fingerprint="B",
+        )
+
+    assert result == "ok"
+
+
+def test_same_credentials_stay_blocked(tmp_path):
+    """Gegenprobe: gleiche (weiterhin falsche) Zugangsdaten -> Sperre gilt."""
+    budget = _budget(tmp_path)
+    budget.record_access_failure("cgi", credential_fingerprint="A")
+    calls = []
+
+    with patch("smsammad.access_guard.send_mail") as mail:
+        with pytest.raises(AccessBlocked) as excinfo:
+            guarded_call(
+                budget, "cgi", (AuthError,), _notification(), "Testaktion",
+                lambda: calls.append(1), credential_fingerprint="A",
+            )
+
+    assert calls == []
+    assert excinfo.value.just_entered is False
+    mail.assert_not_called()
+
+
+def test_dry_run_double_failure_persists_no_block_and_no_mail(tmp_path):
+    """Punkt 3: ein Dry-Run mit falschen Zugangsdaten darf keinen
+    persistenten Sperr-Zustand hinterlassen (der die produktiven Laeufe
+    dann still aussperren wuerde) und keine Mail schicken -- stattdessen
+    schlaegt der echte Auth-Fehler sichtbar durch."""
+    budget = _budget(tmp_path)
+
+    with patch("smsammad.access_guard.send_mail") as mail:
+        with pytest.raises(AuthError):
+            guarded_call(
+                budget, "cgi", (AuthError,), _notification(), "Testaktion",
+                _always_auth_fail(), credential_fingerprint="A", dry_run=True,
+            )
+
+    assert budget.access_blocked_until("cgi", "A") is None  # nichts persistiert
+    mail.assert_not_called()
+
+
+def test_dry_run_respects_existing_production_block(tmp_path):
+    """Eine bereits bestehende (produktive) Sperre soll ein Dry-Run
+    trotzdem beachten -- er zeigt damit korrekt, dass der echte Lauf
+    uebersprungen wuerde."""
+    budget = _budget(tmp_path)
+    budget.record_access_failure("cgi", credential_fingerprint="A")
+
+    with patch("smsammad.access_guard.send_mail"):
+        with pytest.raises(AccessBlocked) as excinfo:
+            guarded_call(
+                budget, "cgi", (AuthError,), _notification(), "Testaktion",
+                lambda: "ok", credential_fingerprint="A", dry_run=True,
+            )
+
+    assert excinfo.value.just_entered is False
+
+
+def test_dry_run_recovery_does_not_delete_state(tmp_path):
+    """Ein erfolgreicher Dry-Run darf einen bestehenden Sperr-Zustand NICHT
+    aufraeumen (kein persistenter Seiteneffekt) und keine Entwarnungsmail
+    schicken."""
+    budget = _budget(tmp_path)
+    budget.record_access_failure("cgi", credential_fingerprint="A")
+    # Sperre ablaufen lassen, damit der Aufruf durchkommt
+    with budget._connect() as conn:
+        conn.execute(
+            "UPDATE access_state SET blocked_until = ? WHERE scope = 'cgi'",
+            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),),
+        )
+
+    with patch("smsammad.access_guard.send_mail") as mail:
+        result = guarded_call(
+            budget, "cgi", (AuthError,), _notification(), "Testaktion",
+            lambda: "ok", credential_fingerprint="A", dry_run=True,
+        )
+
+    assert result == "ok"
+    mail.assert_not_called()
+    # Zustand unveraendert vorhanden (block_level nicht geloescht)
+    with budget._connect() as conn:
+        row = conn.execute("SELECT block_level FROM access_state WHERE scope='cgi'").fetchone()
+    assert row is not None and row[0] == 1

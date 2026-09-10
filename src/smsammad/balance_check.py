@@ -118,6 +118,9 @@ def _run_ussd(
         config.notification,
         "USSD-Guthabenabfrage",
         lambda: api.send_ussd(balance_config.ussd_code),
+        credential_fingerprint=access_guard.fingerprint(
+            balance_config.api_username, balance_config.api_password
+        ),
     )
     response_text = _cleanup_ussd_text(response_text)
 
@@ -173,6 +176,9 @@ def _run_sms(
         config.notification,
         "Guthaben-Abfrage-SMS senden",
         lambda: teltonika.send(balance_config.query_number, balance_config.query_text),
+        credential_fingerprint=access_guard.fingerprint(
+            config.teltonika.username, config.teltonika.password
+        ),
     )
     budget.mark_balance_queried()
     logger.info("balance-check: Guthaben-Abfrage-SMS an %r gesendet", balance_config.query_number)

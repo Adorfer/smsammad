@@ -305,3 +305,45 @@ def test_record_access_success_resets_state_and_signals_recovery(tmp_path):
 def test_record_access_success_false_when_never_failed(tmp_path):
     budget = _budget(tmp_path)
     assert budget.record_access_success("cgi") is False
+
+
+def test_access_block_ignored_when_credentials_changed(tmp_path):
+    """Sperre mit Fingerprint A -> mit demselben Fingerprint noch gesperrt,
+    mit einem anderen (korrigierte Zugangsdaten) nicht mehr."""
+    budget = _budget(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    budget.record_access_failure("cgi", credential_fingerprint="fpA", now=now)
+    assert budget.access_blocked_until("cgi", "fpA", now=now) is not None
+    assert budget.access_blocked_until("cgi", "fpB", now=now) is None
+
+
+def test_access_block_without_fingerprint_arg_still_applies(tmp_path):
+    """Ohne uebergebenen Fingerprint (z.B. alter Aufrufstil) bleibt die
+    Sperre wirksam -- der Fingerprint-Abgleich ist rein additiv."""
+    budget = _budget(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    budget.record_access_failure("cgi", credential_fingerprint="fpA", now=now)
+    assert budget.access_blocked_until("cgi", now=now) is not None
+
+
+def test_changed_credentials_reset_escalation(tmp_path):
+    """Andere Zugangsdaten = neues Problem -> Eskalation beginnt wieder bei
+    Stufe 1 (4h), nicht bei der naechsten Stufe der alten Kette."""
+    budget = _budget(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    budget.record_access_failure("cgi", credential_fingerprint="fpA", now=now)  # 4h
+    budget.record_access_failure("cgi", credential_fingerprint="fpA", now=now)  # 8h
+    blocked_until = budget.record_access_failure("cgi", credential_fingerprint="fpB", now=now)
+    assert blocked_until == now + timedelta(hours=4)  # zurueck auf Stufe 1
+
+
+def test_record_access_success_clears_fingerprint(tmp_path):
+    """Nach einem Erfolg darf kein verwaister Fingerprint zurueckbleiben --
+    sonst wuerde eine spaetere Sperre faelschlich mit dem alten Fingerprint
+    verglichen."""
+    budget = _budget(tmp_path)
+    budget.record_access_failure("cgi", credential_fingerprint="fpA")
+    budget.record_access_success("cgi")
+    # neue Sperre, gleiche Zugangsdaten -> muss wieder als gesperrt gelten
+    budget.record_access_failure("cgi", credential_fingerprint="fpA")
+    assert budget.access_blocked_until("cgi", "fpA") is not None
