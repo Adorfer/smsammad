@@ -268,6 +268,20 @@ def test_find_customer_by_phone_falls_back_to_shorter_token(client):
 
 
 @responses.activate
+def test_find_customer_by_phone_requests_explicit_search_limit(client):
+    """Zammads users/search kappt ohne limit stillschweigend bei 50
+    Treffern (live verifiziert) -- jeder Suchaufruf muss daher ein
+    explizites, grosszuegiges limit mitschicken."""
+    responses.add(
+        responses.GET, f"{BASE}/users/search", json=[{"id": 55, "mobile": "+491721234567"}]
+    )
+
+    client.find_customer_by_phone("+491721234567", "DE")
+
+    assert "limit=500" in responses.calls[0].request.url
+
+
+@responses.activate
 def test_find_customer_by_phone_fallback_gives_up_after_all_lengths(client):
     """Auch nach allen Fallback-Laengen kein Treffer -> None, kein
     Endlos-Nachfragen."""

@@ -71,6 +71,13 @@ def _search_token(value: str) -> str:
 # der Praxis nicht vorkommenden Formatierungsfall.
 _FALLBACK_TOKEN_LENGTHS = (4, 3, 2)
 
+# Zammads users/search liefert ohne explizites limit stillschweigend nur
+# die ersten 50 Treffer (live verifiziert: "*9*" -> 50, mit limit=500 ->
+# 195). Gerade die kurzen Fallback-Token oben erzeugen viele Treffer --
+# ohne dieses Limit fiele der gesuchte Kunde bei wachsendem Kundenstamm
+# einfach aus der Ergebnisliste, ohne jede Fehlermeldung.
+_USER_SEARCH_LIMIT = 500
+
 
 @dataclass
 class Ticket:
@@ -155,7 +162,14 @@ class ZammadClient:
         self, e164_number: str, default_region: str, token: str
     ) -> list[int]:
         field = self._config.phone_field
-        results = self._request("GET", "users/search", params={"query": f"*{token}*"}) or []
+        results = (
+            self._request(
+                "GET",
+                "users/search",
+                params={"query": f"*{token}*", "limit": _USER_SEARCH_LIMIT},
+            )
+            or []
+        )
         return [
             candidate["id"]
             for candidate in results
