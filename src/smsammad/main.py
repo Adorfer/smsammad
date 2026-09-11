@@ -13,6 +13,9 @@ Subcommands:
 - check-setup: prueft (und mit --fix repariert) die Zammad-seitige
   Installation (Trigger, Gruppenzugriff) -- nur aktiv, wenn [zammad]
   self_manage_setup=true in der config.ini gesetzt ist, siehe setup_check.py
+- reset-access: hebt eine fail2ban-Schutzsperre (siehe access_guard.py)
+  manuell auf, rein lokal ohne Router-Kontakt -- noetig, wenn das Problem am
+  Router behoben wurde statt in der config.ini
 """
 
 import argparse
@@ -30,7 +33,20 @@ from .teltonika import TeltonikaClient
 from .zammad import ZammadClient
 
 
-def _run_direction(name: str, config: Config, dry_run: bool, fix: bool = False) -> None:
+def _run_direction(
+    name: str, config: Config, dry_run: bool, fix: bool = False, scope: str | None = None
+) -> None:
+    if name == "reset-access":
+        # Rein lokal, bewusst VOR dem Anlegen der Router-/Zammad-Clients:
+        # darf nie selbst einen Router-Zugriff ausloesen.
+        budget = SmsBudget(
+            config.ticket_to_sms.stats_db_file,
+            config.ticket_to_sms.max_sms_per_hour,
+            config.ticket_to_sms.max_sms_per_24h,
+        )
+        access_guard.run_reset(budget, scope, dry_run)
+        return
+
     if name == "stats":
         # Rein lokale Auswertung + Mail, keine Zammad-/Teltonika-Zugriffe noetig.
         budget = SmsBudget(
@@ -107,6 +123,16 @@ def main() -> None:
             "[zammad] self_manage_setup=true in der config.ini"
         ),
     )
+    reset_access_parser = subparsers.add_parser("reset-access", parents=[subcommand_flags])
+    reset_access_parser.add_argument(
+        "--scope",
+        choices=access_guard.SCOPES,
+        default=None,
+        help=(
+            "nur diesen Zugang freigeben (cgi = SMS-Gateway, api = REST-API/USSD); "
+            "ohne Angabe beide"
+        ),
+    )
 
     args = parser.parse_args()
     logger = setup_logging(args.verbose)
@@ -124,7 +150,13 @@ def main() -> None:
         )
 
     try:
-        _run_direction(args.command, config, args.dry_run, fix=getattr(args, "fix", False))
+        _run_direction(
+            args.command,
+            config,
+            args.dry_run,
+            fix=getattr(args, "fix", False),
+            scope=getattr(args, "scope", None),
+        )
     except setup_check.SetupProblem as exc:
         # Kein Traceback: die Meldung ist bereits ein vollstaendiger,
         # lesbarer Diagnosebericht (siehe setup_check.py), kein

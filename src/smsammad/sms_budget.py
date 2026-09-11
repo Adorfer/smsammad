@@ -351,6 +351,32 @@ class SmsBudget:
                 conn.execute("DELETE FROM meta WHERE key = ?", (self._fp_key(scope),))
         return had_failure
 
+    def list_access_blocks(self) -> list[tuple[str, int, datetime | None]]:
+        """Alle Zugaenge mit gespeichertem Sperr-Zustand (auch bereits
+        abgelaufene Sperren, deren Eskalationsstufe noch gilt) -- fuer
+        reset-access. Liefert (scope, block_level, blocked_until)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT scope, block_level, blocked_until FROM access_state ORDER BY scope"
+            ).fetchall()
+        return [
+            (scope, level, datetime.fromisoformat(until) if until else None)
+            for scope, level, until in rows
+        ]
+
+    def clear_access_block(self, scope: str) -> bool:
+        """Manuelles Aufheben einer Sperre (reset-access), ohne jeden
+        Router-Kontakt: Sperr-Zustand, Eskalationsstufe und Fingerprint
+        loeschen. Fuer den Fall, dass das Problem am ROUTER behoben wurde
+        (Berechtigung nachgetragen, Post/Get wieder aktiviert, Router-
+        Passwort zurueckgesetzt) -- dann aendert sich die config.ini nicht,
+        und der Fingerprint-Abgleich allein hebt die Sperre nicht auf.
+        Liefert True, wenn ueberhaupt ein Zustand bestand."""
+        with self._connect() as conn:
+            deleted = conn.execute("DELETE FROM access_state WHERE scope = ?", (scope,)).rowcount
+            conn.execute("DELETE FROM meta WHERE key = ?", (self._fp_key(scope),))
+        return deleted > 0
+
     def mark_balance_queried(self, now: datetime | None = None) -> None:
         """Nur nach einer tatsaechlich gesendeten SMS-Guthabenabfrage
         aufrufen (siehe should_query_balance) -- NICHT nach einer

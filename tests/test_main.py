@@ -166,9 +166,35 @@ def test_dry_run_flag_works_regardless_of_position(monkeypatch, tmp_path, argv_t
     monkeypatch.setattr(
         main_module,
         "_run_direction",
-        lambda name, config, dry_run, fix=False: calls.append((name, dry_run)),
+        lambda name, config, dry_run, **kwargs: calls.append((name, dry_run)),
     )
 
     main()
 
     assert calls == [("sms-to-ticket", True)]
+
+
+def test_reset_access_clears_block_without_touching_router_or_zammad(monkeypatch, tmp_path):
+    """reset-access ist rein lokal: es darf weder einen Teltonika- noch
+    einen Zammad-Client anlegen (sonst koennte ausgerechnet der Reset einen
+    Router-Zugriff und damit einen fail2ban-Fehlversuch ausloesen)."""
+    from smsammad.sms_budget import SmsBudget
+
+    db_file = tmp_path / "stats.db"
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(
+        CONFIG_INI + f'\n[ticket_to_sms]\nstats_db_file = "{db_file}"\n', encoding="utf-8"
+    )
+    config_path.chmod(0o600)
+    SmsBudget(db_file, 20, 100).record_access_failure("cgi")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("reset-access darf keinen Router-/Zammad-Client anlegen")
+
+    monkeypatch.setattr(main_module, "TeltonikaClient", forbidden)
+    monkeypatch.setattr(main_module, "ZammadClient", forbidden)
+    monkeypatch.setattr(sys, "argv", ["smsammad", "--config", str(config_path), "reset-access"])
+
+    main()
+
+    assert SmsBudget(db_file, 20, 100).list_access_blocks() == []

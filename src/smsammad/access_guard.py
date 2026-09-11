@@ -32,6 +32,7 @@ Verfahren, User-Wunsch:
 import hashlib
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Callable, TypeVar
 
 from .config import NotificationConfig
@@ -43,6 +44,18 @@ logger = logging.getLogger("smsammad")
 T = TypeVar("T")
 
 _RETRY_DELAY_SECONDS = 10
+
+SCOPES = ("cgi", "api")
+
+# Der Fingerprint-Abgleich hebt eine Sperre nur auf, wenn sich die
+# Zugangsdaten in der config.ini aendern. Wird das Problem stattdessen am
+# ROUTER behoben (Gruppenrecht nachgetragen, Post/Get aktiviert, Router-
+# Passwort auf den Config-Wert zurueckgesetzt), bliebe die Sperre sonst
+# bis zu 24h bestehen -- deshalb der Hinweis auf den manuellen Ausweg.
+RESET_HINT = (
+    "Wurde das Problem am Router behoben statt in der config.ini, die Sperre "
+    "sofort aufheben mit: python3 run.py reset-access"
+)
 
 
 def fingerprint(*parts: str) -> str:
@@ -99,7 +112,8 @@ def guarded_call(
     if blocked_until is not None:
         raise AccessBlocked(
             f"Zugang '{scope}' ({action_label}) weiterhin gesperrt bis "
-            f"{blocked_until.isoformat()} -- ueberspringe diesen Lauf ohne Router-Kontakt.",
+            f"{blocked_until.isoformat()} -- ueberspringe diesen Lauf ohne Router-Kontakt. "
+            f"{RESET_HINT}",
             just_entered=False,
         )
 
@@ -130,7 +144,9 @@ def guarded_call(
                 f"jetzt bis {new_blocked_until.isoformat()} nicht mehr kontaktiert. "
                 "Weitere Cron-Laeufe werden bis dahin ohne weitere Mail uebersprungen; "
                 "bei Erfolg des naechsten Versuchs kommt automatisch eine Entwarnungsmail. "
-                "Bitte Zugangsdaten/Berechtigungen pruefen."
+                "Bitte Zugangsdaten/Berechtigungen pruefen.\n\n"
+                "Korrigierte Zugangsdaten in der config.ini heben die Sperre automatisch "
+                f"auf. {RESET_HINT}"
             )
             _try_send_mail(notification, f"SMSammad: Zugriff '{scope}' gesperrt", message)
             raise AccessBlocked(message, just_entered=True) from None
@@ -157,6 +173,34 @@ def _maybe_notify_recovered(
             f"SMSammad: Zugriff '{scope}' wieder ok",
             f"Zugang '{scope}' ({action_label}) funktioniert wieder normal.",
         )
+
+
+def run_reset(budget: SmsBudget, scope: str | None, dry_run: bool) -> None:
+    """Subcommand reset-access: Sperr-Zustand manuell aufheben -- rein
+    lokal in der SQLite-DB, KEIN Router-Kontakt (also selbst kein Beitrag
+    zum fail2ban-Zaehler). Der naechste regulaere Lauf versucht es dann
+    wieder, weiterhin mit hoechstens einem Wiederholversuch."""
+    scopes = (scope,) if scope else SCOPES
+    known = {s: (level, until) for s, level, until in budget.list_access_blocks()}
+    now = datetime.now(timezone.utc)
+
+    for s in scopes:
+        if s not in known:
+            logger.info("reset-access: Zugang '%s' hat keinen Sperr-Zustand, nichts zu tun", s)
+            continue
+        level, until = known[s]
+        state = (
+            f"gesperrt bis {until.isoformat()}"
+            if until is not None and until > now
+            else "Sperre abgelaufen, Eskalationsstufe noch gespeichert"
+        )
+        if dry_run:
+            logger.info(
+                "[dry-run] reset-access: wuerde Zugang '%s' freigeben (%s, Stufe %d)", s, state, level
+            )
+            continue
+        budget.clear_access_block(s)
+        logger.info("reset-access: Zugang '%s' freigegeben (war: %s, Stufe %d)", s, state, level)
 
 
 def _try_send_mail(notification: NotificationConfig | None, subject: str, body: str) -> None:

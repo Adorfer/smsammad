@@ -347,3 +347,26 @@ def test_record_access_success_clears_fingerprint(tmp_path):
     # neue Sperre, gleiche Zugangsdaten -> muss wieder als gesperrt gelten
     budget.record_access_failure("cgi", credential_fingerprint="fpA")
     assert budget.access_blocked_until("cgi", "fpA") is not None
+
+
+def test_list_access_blocks_reports_stored_state(tmp_path):
+    budget = _budget(tmp_path)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    budget.record_access_failure("cgi", now=now)
+    assert budget.list_access_blocks() == [("cgi", 1, now + timedelta(hours=4))]
+
+
+def test_clear_access_block_removes_state_and_fingerprint(tmp_path):
+    budget = _budget(tmp_path)
+    budget.record_access_failure("api", credential_fingerprint="A")
+
+    assert budget.clear_access_block("api") is True
+    assert budget.list_access_blocks() == []
+    assert budget.access_blocked_until("api", "A") is None
+    # Eskalation beginnt nach manuellem Reset wieder bei Stufe 1 (4h)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert budget.record_access_failure("api", now=now) == now + timedelta(hours=4)
+
+
+def test_clear_access_block_false_when_nothing_stored(tmp_path):
+    assert _budget(tmp_path).clear_access_block("cgi") is False

@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from smsammad.access_guard import AccessBlocked, guarded_call
+from smsammad.access_guard import AccessBlocked, guarded_call, run_reset
 from smsammad.config import NotificationConfig
 from smsammad.sms_budget import SmsBudget
 
@@ -247,3 +247,44 @@ def test_dry_run_recovery_does_not_delete_state(tmp_path):
     with budget._connect() as conn:
         row = conn.execute("SELECT block_level FROM access_state WHERE scope='cgi'").fetchone()
     assert row is not None and row[0] == 1
+
+
+def test_block_mail_mentions_manual_reset(tmp_path):
+    """Wird das Problem am Router behoben (Config unveraendert), hilft der
+    Fingerprint nicht -- die Mail muss den manuellen Ausweg nennen."""
+    budget = _budget(tmp_path)
+
+    with patch("smsammad.access_guard.send_mail") as mail:
+        with pytest.raises(AccessBlocked):
+            guarded_call(budget, "api", (AuthError,), _notification(), "Testaktion", _always_auth_fail())
+
+    assert "reset-access" in mail.call_args.kwargs["body"]
+
+
+def test_run_reset_clears_only_requested_scope(tmp_path):
+    budget = _budget(tmp_path)
+    budget.record_access_failure("cgi")
+    budget.record_access_failure("api")
+
+    run_reset(budget, "api", dry_run=False)
+
+    assert [scope for scope, _, _ in budget.list_access_blocks()] == ["cgi"]
+
+
+def test_run_reset_without_scope_clears_all(tmp_path):
+    budget = _budget(tmp_path)
+    budget.record_access_failure("cgi")
+    budget.record_access_failure("api")
+
+    run_reset(budget, None, dry_run=False)
+
+    assert budget.list_access_blocks() == []
+
+
+def test_run_reset_dry_run_changes_nothing(tmp_path):
+    budget = _budget(tmp_path)
+    budget.record_access_failure("cgi")
+
+    run_reset(budget, None, dry_run=True)
+
+    assert [scope for scope, _, _ in budget.list_access_blocks()] == ["cgi"]

@@ -200,6 +200,7 @@ python3 run.py sms-to-ticket --config config.ini
 python3 run.py balance-check --config config.ini
 python3 run.py stats --config config.ini
 python3 run.py check-setup --config config.ini   # optional, siehe unten
+python3 run.py reset-access --config config.ini  # nur bei Bedarf: fail2ban-Schutzsperre aufheben
 ```
 
 `--dry-run` für einen Testlauf ohne Seiteneffekte (keine Zammad-/
@@ -1100,6 +1101,18 @@ Live gegen ein echtes RUT240 verifiziert (siehe `teltonika.py`):
     sichtbar im Konsolen-Output durch. Eine **bereits bestehende**
     (produktive) Sperre beachtet auch der Dry-Run -- er zeigt damit
     korrekt, dass der echte Lauf übersprungen würde.
+  - **Manuelles Aufheben: `reset-access`**: Der Fingerprint hilft nur,
+    wenn sich die `config.ini` ändert. Wird das Problem **am Router**
+    behoben — fehlendes Gruppenrecht `network/mobile/general`
+    nachgetragen, Post/Get wieder aktiviert, Router-Passwort auf den
+    Config-Wert zurückgesetzt —, bliebe die Sperre sonst bis zu 24h
+    bestehen. `python3 run.py reset-access` (optional `--scope cgi|api`,
+    mit `--dry-run` nur anzeigen) löscht Sperre, Eskalationsstufe und
+    Fingerprint **rein lokal in der SQLite-DB, ohne Router-Kontakt** —
+    der Reset selbst kann also keinen fail2ban-Fehlversuch auslösen. Der
+    nächste reguläre Lauf versucht es wieder, weiterhin mit höchstens
+    einem Retry. Sperr-Mail und Überspringen-Meldung nennen diesen
+    Befehl.
 
 ### Credential-Sicherheit beim Teltonika-Zugriff
 
