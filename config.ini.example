@@ -37,7 +37,7 @@ enabled = true
 ; ALLES rund um SMS-Versand und -Empfang.
 ;
 ; WICHTIG: username/password hier sind NICHT das Router-Admin-Login und
-; auch kein Benutzerkonto aus System -> Administration -> Users, sondern
+; auch kein Benutzerkonto aus System -> Administration -> User Settings, sondern
 ; ein eigenes, feature-spezifisches Login-Paar aus der SMS-Gateway-
 ; Konfiguration des Routers (RutOS 7.x: Services -> Mobile Utilities ->
 ; SMS Gateway -> Post/Get; Menuepfad je nach Firmware-Version leicht
@@ -99,8 +99,9 @@ retry_delay_seconds = 180
 ;   Router-Account mit Zugriff auf die Mobile/USSD-API -- der cgi-bin-
 ;   SMS-Account (s. [teltonika]) hat dort KEINE Berechtigung (live
 ;   verifiziert: 401/403). Account im Router-WebUI anlegen (System ->
-;   Administration -> Users) und dort explizit Zugriff auf Network ->
-;   Mobile geben.
+;   Administration -> User Settings, Reiter System Users); die Rechte
+;   haengen an seiner GRUPPE: dort Read und Write access auf
+;   network/mobile/general.
 ; method = "sms": Abfrage-SMS an eine Kurzwahl, Antwort trifft asynchron
 ;   ein und wird vom naechsten sms-to-ticket-Lauf ausgewertet (erkannt am
 ;   Absender reply_sender).
@@ -125,8 +126,9 @@ method = "ussd"
 ; Minuten ab), bei manuellen Aufrufen kurz hintereinander schon.
 ussd_code = "*106#"
 ; Zugangsdaten des dedizierten Mobile-API-Accounts (siehe oben): ein
-; echtes Router-Benutzerkonto aus System -> Administration -> Users, mit
-; explizit gesetztem Zugriff auf Network -> Mobile.
+; echtes Router-Benutzerkonto aus System -> Administration -> User
+; Settings -> System Users, dessen Gruppe Read+Write auf
+; network/mobile/general hat.
 ;
 ; Zum Namen "api_": beide Wege sind streng genommen APIs -- gemeint ist
 ; hier die moderne RutOS-REST-API (/api/..., JSON, Bearer-Token-Login),
