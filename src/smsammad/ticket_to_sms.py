@@ -56,6 +56,17 @@ def run(
         config.ticket_to_sms.max_sms_per_24h,
     )
 
+    if not dry_run:
+        for stale_ticket_id, stale_article_id in budget.prune_sent_articles():
+            logger.warning(
+                "ticket_to_sms: SMS aus Artikel %s (Ticket-ID %s) wurde vor ueber 7 Tagen "
+                "gesendet, der Zammad-Vermerk wurde aber nie nachgetragen (Tag '%s' "
+                "vermutlich von Hand entfernt) -- lokalen Vermerk verworfen",
+                stale_article_id,
+                stale_ticket_id,
+                TAG_OUT,
+            )
+
     failures = 0
     budget_blocked: list[str] = []
     for ticket_id in ticket_ids:
@@ -239,6 +250,11 @@ def _process_one(
             f"Ticket {ticket_number}: kein oeffentlicher Anruf-Artikel vom Agenten vorhanden "
             f"(SMS-Antwort muss im 'Anruf'-Tab, nicht intern, verfasst werden)"
         )
+    article_id = agent_calls[-1].get("id")
+    if article_id is not None and _already_sent(
+        ticket_id, ticket_number, article_id, zammad, budget, dry_run
+    ):
+        return
     text = html_to_text(agent_calls[-1]["body"])
     agent = agent_calls[-1].get("from")
     group_name = zammad.get_group_name(ticket["group_id"]) if ticket.get("group_id") else None
@@ -260,9 +276,77 @@ def _process_one(
         agent,
     )
     if config.ticket_to_sms.send_mode == "classic":
-        _process_classic(*send_args)
+        _process_classic(*send_args, article_id=article_id)
     else:
-        _process_multipart(*send_args)
+        _process_multipart(*send_args, article_id=article_id)
+
+
+def _already_sent(
+    ticket_id: int,
+    ticket_number: str,
+    article_id: int,
+    zammad: ZammadClient,
+    budget: SmsBudget,
+    dry_run: bool,
+) -> bool:
+    """Doppelversand-Sperre (siehe sent_articles in sms_budget.py). True =
+    dieser Artikel darf NICHT (erneut) gesendet werden, der Aufrufer bricht
+    ab. Drei Faelle:
+
+    - Nie gesendet -> False, ganz normaler Versand.
+    - Gesendet, Zammad-Buchhaltung aber unvollstaendig (Zammad fiel direkt
+      nach dem Versand aus, Tag 'sms-out' blieb deshalb stehen) -> NICHT
+      erneut senden, nur die fehlenden Schritte nachholen.
+    - Gesendet und vollstaendig verbucht -> erneut senden nur, wenn der
+      Tag 'sms-out' TATSAECHLICH am Ticket steht (ein Agent hat ihn bewusst
+      neu gesetzt). Direkt am Ticket geprueft, nicht ueber die Tag-Suche:
+      Zammads Suchindex ist nur near-realtime und koennte ein laengst
+      verbuchtes Ticket noch kurz als 'sms-out' liefern.
+    """
+    state = budget.sent_article_state(ticket_id, article_id)
+    if state is None:
+        return False
+    stage, note = state
+
+    if stage < SmsBudget.SENT_STAGE_DONE:
+        if dry_run:
+            logger.info(
+                "[dry-run] Ticket %s: SMS aus Artikel %s wurde bereits gesendet, die "
+                "Zammad-Buchhaltung ist aber unvollstaendig -- wuerde NUR Vermerk/Tags "
+                "nachtragen, NICHT erneut senden",
+                ticket_number,
+                article_id,
+            )
+            return True
+        logger.warning(
+            "Ticket %s: SMS aus Artikel %s wurde bereits gesendet, die Zammad-Buchhaltung "
+            "aber nicht abgeschlossen (Zammad war nicht erreichbar) -- trage sie nach, "
+            "KEIN erneuter Versand",
+            ticket_number,
+            article_id,
+        )
+        _finish_bookkeeping(
+            ticket_id, article_id, note + _BOOKKEEPING_RESUMED_HINT, stage, zammad, budget
+        )
+        return True
+
+    if TAG_OUT not in zammad.get_tags(ticket_id):
+        logger.info(
+            "Ticket %s: Artikel %s ist bereits gesendet und verbucht, Tag '%s' steht nicht "
+            "mehr am Ticket (veralteter Suchindex) -- uebersprungen",
+            ticket_number,
+            article_id,
+            TAG_OUT,
+        )
+        return True
+    logger.info(
+        "Ticket %s: Artikel %s wurde schon einmal gesendet, Tag '%s' wurde aber neu "
+        "gesetzt -- sende erneut",
+        ticket_number,
+        article_id,
+        TAG_OUT,
+    )
+    return False
 
 
 def _process_classic(
@@ -280,6 +364,7 @@ def _process_classic(
     budget_blocked: list[str],
     group_name: str | None,
     agent: str | None,
+    article_id: int | None = None,
 ) -> None:
     """send_mode = 'classic': eigenes manuelles Aufteilen in mehrere
     eigenstaendige Einzel-SMS mit '(N/M) '-Praefix, jede ein eigener
@@ -309,6 +394,7 @@ def _process_classic(
                 group_name,
                 agent,
                 truncated_from=total_parts,
+                article_id=article_id,
             )
         else:
             _handle_overflow_reject(
@@ -341,6 +427,7 @@ def _process_classic(
         budget_blocked,
         group_name,
         agent,
+        article_id=article_id,
     )
 
 
@@ -359,6 +446,7 @@ def _process_multipart(
     budget_blocked: list[str],
     group_name: str | None,
     agent: str | None,
+    article_id: int | None = None,
 ) -> None:
     """send_mode = 'multipart' (Default): der GESAMTE Text geht in EINEM
     API-Aufruf an den Router, der die echte SMS-Verkettung uebernimmt --
@@ -404,6 +492,7 @@ def _process_multipart(
                 group_name,
                 agent,
                 truncated_from=segments_needed,
+                article_id=article_id,
             )
         else:
             _handle_overflow_reject(
@@ -437,6 +526,7 @@ def _process_multipart(
         budget_blocked,
         group_name,
         agent,
+        article_id=article_id,
     )
 
 
@@ -497,6 +587,7 @@ def _send(
     group_name: str | None = None,
     agent: str | None = None,
     truncated_from: int | None = None,
+    article_id: int | None = None,
 ) -> None:
     """`parts` sind die tatsaechlichen API-Aufrufe (Classic: mehrere
     eigenstaendige Nachrichten; Multipart: IMMER genau eine, der volle
@@ -540,21 +631,53 @@ def _send(
             ticket_id, ticket_number, current_state_id, current_title, exc, zammad, config
         )
         return
-    budget.record_sent(credits, group=group_name, agent=agent, ticket_number=ticket_number)
-
     now_str = datetime.now().astimezone().strftime("%d.%m.%Y %H:%M:%S")
     alarm_hint = _low_balance_hint(config, budget)
     note = _build_send_note(text, parts, credits, now_str, truncated_from, alarm_hint)
-    zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
+    # Doppelversand-Sperre: der Versand ist erfolgt -- das SOFORT lokal
+    # festhalten, BEVOR Zammad angefasst wird. Faellt Zammad jetzt aus,
+    # bliebe sonst der Tag 'sms-out' stehen und der naechste Lauf wuerde
+    # dieselbe SMS ein zweites Mal senden (siehe _process_one).
+    if article_id is not None:
+        budget.record_sent_article(ticket_id, article_id, note)
+    budget.record_sent(credits, group=group_name, agent=agent, ticket_number=ticket_number)
+    _finish_bookkeeping(ticket_id, article_id, note, SmsBudget.SENT_STAGE_SENT, zammad, budget)
+
+    parts_label = "1 SMS" if credits == 1 else f"{credits} SMS-Teile"
+    logger.info("Ticket %s: %s erfolgreich an %s uebergeben", ticket_number, parts_label, number)
+
+
+_BOOKKEEPING_RESUMED_HINT = (
+    "\n\n(Vermerk nachgetragen: Zammad war direkt nach dem Versand nicht erreichbar. "
+    "Die SMS wurde trotzdem nur einmal verschickt.)"
+)
+
+
+def _finish_bookkeeping(
+    ticket_id: int,
+    article_id: int | None,
+    note: str,
+    stage: int,
+    zammad: ZammadClient,
+    budget: SmsBudget,
+) -> None:
+    """Zammad-Buchhaltung nach erfolgreichem Versand, ab `stage`
+    fortgesetzt (siehe sent_articles in sms_budget.py): Versand-Notiz,
+    dann Tag 'sms-out' -> 'sms-sent'. Jeder Schritt wird lokal vermerkt,
+    damit ein Wiederaufsetzen nach einem Zammad-Ausfall keine Notiz
+    doppelt schreibt."""
+    if stage < SmsBudget.SENT_STAGE_NOTE:
+        zammad.add_article(ticket_id, note, internal=True, article_type="note", sender="Agent")
+        if article_id is not None:
+            budget.set_sent_article_stage(ticket_id, article_id, SmsBudget.SENT_STAGE_NOTE)
     zammad.remove_tag(ticket_id, TAG_OUT)
     zammad.add_tag(ticket_id, TAG_SENT)
     # Falls zuvor ein Budget-Wartehinweis gesetzt wurde: entfernen, damit ein
     # spaeterer erneuter Engpass wieder eine frische Notiz bekommt.
     if TAG_BUDGET_WAIT in zammad.get_tags(ticket_id):
         zammad.remove_tag(ticket_id, TAG_BUDGET_WAIT)
-
-    parts_label = "1 SMS" if credits == 1 else f"{credits} SMS-Teile"
-    logger.info("Ticket %s: %s erfolgreich an %s uebergeben", ticket_number, parts_label, number)
+    if article_id is not None:
+        budget.set_sent_article_stage(ticket_id, article_id, SmsBudget.SENT_STAGE_DONE)
 
 
 def _handle_send_failed(

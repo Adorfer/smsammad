@@ -40,6 +40,21 @@ CREATE INDEX IF NOT EXISTS idx_balance_history_ts ON balance_history(ts);
 -- dauerhafter Block), siehe access_guard.py. Ein Datensatz pro Zugang
 -- ('cgi' fuer das SMS-Gateway, 'api' fuer die REST-API/USSD) existiert
 -- NUR waehrend/nach einer Sperre -- Erfolg loescht die Zeile wieder.
+-- Doppelversand-Sperre, siehe ticket_to_sms.py: jede erfolgreich an den
+-- Router uebergebene SMS wird SOFORT hier vermerkt, bevor Zammad
+-- angefasst wird. stage: 0 = gesendet, 1 = Versand-Notiz in Zammad,
+-- 2 = Tags umgestellt (erledigt). Scheitert die Zammad-Buchhaltung
+-- (Ausfall), holt der naechste Lauf nur die fehlenden Schritte nach,
+-- statt dieselbe SMS ein zweites Mal zu senden.
+CREATE TABLE IF NOT EXISTS sent_articles (
+    ticket_id INTEGER NOT NULL,
+    article_id INTEGER NOT NULL,
+    sent_at TEXT NOT NULL,
+    note TEXT NOT NULL,
+    stage INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (ticket_id, article_id)
+);
+
 CREATE TABLE IF NOT EXISTS access_state (
     scope TEXT PRIMARY KEY,
     block_level INTEGER NOT NULL DEFAULT 0,
@@ -376,6 +391,72 @@ class SmsBudget:
             deleted = conn.execute("DELETE FROM access_state WHERE scope = ?", (scope,)).rowcount
             conn.execute("DELETE FROM meta WHERE key = ?", (self._fp_key(scope),))
         return deleted > 0
+
+    # Doppelversand-Sperre (siehe sent_articles im Schema / ticket_to_sms.py)
+    SENT_STAGE_SENT = 0
+    SENT_STAGE_NOTE = 1
+    SENT_STAGE_DONE = 2
+
+    def record_sent_article(
+        self, ticket_id: int, article_id: int, note: str, now: datetime | None = None
+    ) -> None:
+        """Direkt nach erfolgreicher Uebergabe an den Router, VOR jedem
+        Zammad-Zugriff. Ein erneuter Versand desselben Artikels (Agent hat
+        den Tag bewusst neu gesetzt) beginnt wieder bei Stufe 0."""
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO sent_articles (ticket_id, article_id, sent_at, note, stage) "
+                "VALUES (?, ?, ?, ?, 0) ON CONFLICT(ticket_id, article_id) DO UPDATE SET "
+                "sent_at = excluded.sent_at, note = excluded.note, stage = 0",
+                (ticket_id, article_id, now.isoformat(), note),
+            )
+
+    def set_sent_article_stage(self, ticket_id: int, article_id: int, stage: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE sent_articles SET stage = ? WHERE ticket_id = ? AND article_id = ?",
+                (stage, ticket_id, article_id),
+            )
+
+    def sent_article_state(self, ticket_id: int, article_id: int) -> tuple[int, str] | None:
+        """(stage, note), falls dieser Artikel bereits an den Router
+        uebergeben wurde, sonst None. Auswertung siehe
+        ticket_to_sms._process_one."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT stage, note FROM sent_articles WHERE ticket_id = ? AND article_id = ?",
+                (ticket_id, article_id),
+            ).fetchone()
+        return (row[0], row[1]) if row else None
+
+    def prune_sent_articles(
+        self,
+        done_after: timedelta = timedelta(days=30),
+        pending_after: timedelta = timedelta(days=7),
+        now: datetime | None = None,
+    ) -> list[tuple[int, int]]:
+        """Alte Vermerke aufraeumen. Erledigte nach 30 Tagen; unerledigte
+        nach 7 Tagen (dann hat jemand den Tag 'sms-out' von Hand entfernt,
+        die Buchhaltung wird nie mehr nachgeholt) -- deren (ticket_id,
+        article_id) werden zurueckgegeben, damit der Aufrufer warnen kann."""
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            stale = conn.execute(
+                "SELECT ticket_id, article_id FROM sent_articles WHERE stage < ? AND sent_at < ?",
+                (self.SENT_STAGE_DONE, (now - pending_after).isoformat()),
+            ).fetchall()
+            conn.execute(
+                "DELETE FROM sent_articles WHERE (stage < ? AND sent_at < ?) "
+                "OR (stage >= ? AND sent_at < ?)",
+                (
+                    self.SENT_STAGE_DONE,
+                    (now - pending_after).isoformat(),
+                    self.SENT_STAGE_DONE,
+                    (now - done_after).isoformat(),
+                ),
+            )
+        return [(t, a) for t, a in stale]
 
     # Zammad-Ausfall-Zustand (siehe zammad_outage.py), in der meta-Tabelle
     # -- keine Schema-Aenderung an der produktiven DB noetig. Alle

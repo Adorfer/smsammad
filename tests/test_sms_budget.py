@@ -370,3 +370,35 @@ def test_clear_access_block_removes_state_and_fingerprint(tmp_path):
 
 def test_clear_access_block_false_when_nothing_stored(tmp_path):
     assert _budget(tmp_path).clear_access_block("cgi") is False
+
+
+def test_sent_article_lifecycle(tmp_path):
+    budget = _budget(tmp_path)
+    assert budget.sent_article_state(1, 77) is None
+
+    budget.record_sent_article(1, 77, "Notiz")
+    assert budget.sent_article_state(1, 77) == (SmsBudget.SENT_STAGE_SENT, "Notiz")
+
+    budget.set_sent_article_stage(1, 77, SmsBudget.SENT_STAGE_DONE)
+    assert budget.sent_article_state(1, 77)[0] == SmsBudget.SENT_STAGE_DONE
+
+    # erneuter Versand desselben Artikels (Tag bewusst neu gesetzt) beginnt bei 0
+    budget.record_sent_article(1, 77, "Notiz 2")
+    assert budget.sent_article_state(1, 77) == (SmsBudget.SENT_STAGE_SENT, "Notiz 2")
+
+
+def test_prune_sent_articles_reports_only_stale_pending(tmp_path):
+    budget = _budget(tmp_path)
+    now = datetime(2026, 9, 12, tzinfo=timezone.utc)
+    budget.record_sent_article(1, 10, "alt, unerledigt", now=now - timedelta(days=8))
+    budget.record_sent_article(2, 20, "alt, erledigt", now=now - timedelta(days=31))
+    budget.set_sent_article_stage(2, 20, SmsBudget.SENT_STAGE_DONE)
+    budget.record_sent_article(3, 30, "frisch, unerledigt", now=now - timedelta(days=1))
+    budget.record_sent_article(4, 40, "erledigt, 10 Tage", now=now - timedelta(days=10))
+    budget.set_sent_article_stage(4, 40, SmsBudget.SENT_STAGE_DONE)
+
+    assert budget.prune_sent_articles(now=now) == [(1, 10)]
+    assert budget.sent_article_state(1, 10) is None
+    assert budget.sent_article_state(2, 20) is None
+    assert budget.sent_article_state(3, 30) is not None
+    assert budget.sent_article_state(4, 40) is not None

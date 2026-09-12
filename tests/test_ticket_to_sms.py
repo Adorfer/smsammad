@@ -142,6 +142,21 @@ class FakeBudget:
     def record_access_success(self, scope):
         return False
 
+    # Doppelversand-Sperre: Fake-Artikel haben keine "id", die Sperre greift
+    # dann gar nicht -- hier nur neutrale Stubs. Echte Tests siehe unten
+    # (test_double_send_*), die das echte SmsBudget verwenden.
+    def prune_sent_articles(self, *args, **kwargs):
+        return []
+
+    def sent_article_state(self, ticket_id, article_id):
+        return None
+
+    def record_sent_article(self, ticket_id, article_id, note, now=None):
+        pass
+
+    def set_sent_article_stage(self, ticket_id, article_id, stage):
+        pass
+
 
 def _public_call(body):
     """Fake-Artikel im Format, das ticket_to_sms als SMS-Quelle akzeptiert:
@@ -1025,3 +1040,159 @@ def test_zammad_outage_inside_ticket_loop_propagates_unchanged(monkeypatch):
         ticket_to_sms.run(zammad, FakeTeltonika(), _config(), dry_run=False, budget=FakeBudget())
 
     assert processed == [1]  # sofort abgebrochen, Ticket 2 nicht mehr versucht
+
+
+class _FlakyZammad(FakeZammad):
+    """Faellt EINMAL bei der genannten Methode mit einem Zammad-Ausfall aus
+    -- simuliert ein Zammad-Update genau zwischen SMS-Versand und
+    Buchhaltung."""
+
+    def __init__(self, *args, fail_once_on=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._fail_once_on = fail_once_on
+
+    def _maybe_fail(self, name):
+        from smsammad.zammad import ZammadUnavailable
+
+        if self._fail_once_on == name:
+            self._fail_once_on = None
+            raise ZammadUnavailable(f"{name} -> HTTP 502 (Bad Gateway)")
+
+    def add_article(self, *args, **kwargs):
+        self._maybe_fail("add_article")
+        return super().add_article(*args, **kwargs)
+
+    def remove_tag(self, *args, **kwargs):
+        self._maybe_fail("remove_tag")
+        return super().remove_tag(*args, **kwargs)
+
+
+def _sendable_ticket(fail_once_on=None):
+    return _FlakyZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [{**_public_call("Hallo Kunde"), "id": 77}]},
+        initial_tags={1: ["sms-out"]},
+        fail_once_on=fail_once_on,
+    )
+
+
+def test_double_send_zammad_outage_after_note_does_not_resend(tmp_path):
+    """Zammad faellt nach der Versand-Notiz, aber vor dem Tag-Wechsel aus:
+    der naechste Lauf darf die SMS NICHT erneut senden und die Notiz NICHT
+    doppelt schreiben, nur den Tag-Wechsel nachholen."""
+    from smsammad.zammad import ZammadUnavailable
+
+    zammad = _sendable_ticket(fail_once_on="remove_tag")
+    teltonika = FakeTeltonika()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+
+    with pytest.raises(ZammadUnavailable):
+        ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+    assert len(teltonika.sent) == 1
+    assert "sms-out" in zammad.get_tags(1)
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert len(teltonika.sent) == 1  # KEIN zweiter Versand
+    assert len(zammad.internal_notes) == 1  # Notiz nicht doppelt
+    assert "sms-out" not in zammad.get_tags(1)
+    assert "sms-sent" in zammad.get_tags(1)
+    assert budget.sent_article_state(1, 77)[0] == SmsBudget.SENT_STAGE_DONE
+
+
+def test_double_send_outage_before_note_adds_note_with_hint_later(tmp_path):
+    from smsammad.zammad import ZammadUnavailable
+
+    zammad = _sendable_ticket(fail_once_on="add_article")
+    teltonika = FakeTeltonika()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+
+    with pytest.raises(ZammadUnavailable):
+        ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+    assert zammad.internal_notes == []
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert len(teltonika.sent) == 1
+    assert len(zammad.internal_notes) == 1
+    note = zammad.internal_notes[0][1]
+    assert "an den Router uebergeben" in note  # die urspruengliche Versand-Notiz
+    assert "nachgetragen" in note and "nur einmal verschickt" in note
+
+
+def test_double_send_budget_counted_only_once(tmp_path):
+    """Das Nachholen der Buchhaltung darf das SMS-Budget nicht ein zweites
+    Mal belasten -- es wurde ja nur einmal gesendet."""
+    from smsammad.zammad import ZammadUnavailable
+
+    zammad = _sendable_ticket(fail_once_on="remove_tag")
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+
+    with pytest.raises(ZammadUnavailable):
+        ticket_to_sms.run(zammad, FakeTeltonika(), _config(), dry_run=False, budget=budget)
+    ticket_to_sms.run(zammad, FakeTeltonika(), _config(), dry_run=False, budget=budget)
+
+    assert budget.status().sent_last_hour == 1
+
+
+def test_booked_article_is_skipped_when_search_index_is_stale(tmp_path):
+    """Gesendet und vollstaendig verbucht, die Tag-Suche liefert das Ticket
+    aber trotzdem noch (Zammads Suchindex hinkt nach; der Fake liefert immer
+    alle Tickets) -> Tags direkt am Ticket pruefen, NICHT erneut senden."""
+    zammad = _sendable_ticket()
+    teltonika = FakeTeltonika()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert len(teltonika.sent) == 1
+
+
+def test_booked_article_is_resent_when_agent_sets_tag_again(tmp_path):
+    """Bisheriges Verhalten bleibt: setzt ein Agent den Tag 'sms-out' an
+    einem bereits verbuchten Ticket bewusst neu, geht die SMS erneut raus."""
+    zammad = _sendable_ticket()
+    teltonika = FakeTeltonika()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+    zammad.add_tag(1, "sms-out")  # Agent will die SMS noch einmal schicken
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert len(teltonika.sent) == 2
+    assert "sms-out" not in zammad.get_tags(1)
+
+
+def test_dry_run_with_pending_bookkeeping_neither_sends_nor_books(tmp_path):
+    from smsammad.zammad import ZammadUnavailable
+
+    zammad = _sendable_ticket(fail_once_on="remove_tag")
+    teltonika = FakeTeltonika()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+    with pytest.raises(ZammadUnavailable):
+        ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+    notes_before = len(zammad.internal_notes)
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=True, budget=budget)
+
+    assert len(teltonika.sent) == 1
+    assert len(zammad.internal_notes) == notes_before
+    assert "sms-out" in zammad.get_tags(1)
+    assert budget.sent_article_state(1, 77)[0] == SmsBudget.SENT_STAGE_NOTE
+
+
+def test_double_send_lock_also_in_multipart_mode(tmp_path):
+    from smsammad.zammad import ZammadUnavailable
+
+    zammad = _sendable_ticket(fail_once_on="remove_tag")
+    teltonika = FakeTeltonika()
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+    config = _config(send_mode="multipart")
+
+    with pytest.raises(ZammadUnavailable):
+        ticket_to_sms.run(zammad, teltonika, config, dry_run=False, budget=budget)
+    ticket_to_sms.run(zammad, teltonika, config, dry_run=False, budget=budget)
+
+    assert len(teltonika.sent) == 1

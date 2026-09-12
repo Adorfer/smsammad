@@ -286,6 +286,9 @@ schicken, gehe so vor:
    mit Versandstatus und dem **exakt gesendeten Wortlaut** -- bitte kurz
    gegenprüfen, ob z.B. Umlaute/Sonderzeichen korrekt angekommen sind oder
    der Text (je nach Konfiguration) gekürzt wurde, weil er zu lang war.
+   Steht in der Notiz „Vermerk nachgetragen": Zammad war direkt beim
+   Versand kurz nicht erreichbar, die Notiz kam deshalb einen Durchlauf
+   später — die SMS selbst ging trotzdem **nur einmal** raus.
 
 </details>
 
@@ -1210,6 +1213,35 @@ eine solche Mail erzeugt, obwohl nichts kaputt war.
 - Im **Dry-Run** wird kein Ausfall-Zustand geschrieben oder gelöscht — er
   darf weder den Timer der produktiven Läufe starten noch einen laufenden
   Ausfall beenden (die Entwarnungsmail wäre im Dry-Run unterdrückt).
+
+### Doppelversand-Sperre
+
+`ticket-to-sms` merkte sich „schon gesendet" früher nur über Zammad: nach
+dem Versand die Notiz schreiben und `sms-out` durch `sms-sent` ersetzen.
+Fiel Zammad genau **zwischen** erfolgreichem Versand und diesem Tag-Wechsel
+aus (z.B. ein Update des Zammad-Hosts mitten im Lauf), blieb `sms-out`
+stehen, und der nächste Lauf hätte dem Kunden **dieselbe SMS ein zweites
+Mal** geschickt.
+
+- Jede an den Router übergebene SMS wird **sofort lokal** in SQLite
+  vermerkt (`sent_articles`: Ticket-ID, Artikel-ID, fertige Notiz), bevor
+  Zammad angefasst wird. Der Fortschritt der Zammad-Buchhaltung
+  (Notiz → Tag-Wechsel) wird pro Schritt mitgeschrieben.
+- Findet ein späterer Lauf einen **unvollständig verbuchten** Artikel,
+  sendet er **nicht** erneut, sondern holt nur die fehlenden Schritte
+  nach; die Notiz bekommt den Hinweis „Vermerk nachgetragen … nur einmal
+  verschickt". Das SMS-Budget wird dabei nicht doppelt belastet.
+- Ein **vollständig verbuchter** Artikel wird nur erneut gesendet, wenn
+  `sms-out` **tatsächlich** am Ticket steht (Agent hat den Tag bewusst neu
+  gesetzt — bisheriges Verhalten bleibt). Geprüft direkt am Ticket, nicht
+  über die Tag-Suche: Zammads Suchindex ist nur near-realtime.
+- Schlüssel ist die Zammad-Artikel-ID (live verifiziert: echte Artikel
+  tragen sie). Erledigte Vermerke werden nach 30 Tagen aufgeräumt;
+  unerledigte nach 7 Tagen mit Warnung im Log (dann hat jemand `sms-out`
+  von Hand entfernt, die Buchhaltung würde nie mehr nachgeholt).
+- Restrisiko: stürzt der Prozess in den Millisekunden zwischen Router-
+  Antwort und lokalem SQLite-Vermerk ab, fehlt der Vermerk — dieses
+  Fenster ist rein lokal und nicht mehr an Zammads Verfügbarkeit gekoppelt.
 
 ### Zammad-Trigger: warum `sender == Agent` zwingend nötig ist
 
