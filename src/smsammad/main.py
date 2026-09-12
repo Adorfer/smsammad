@@ -30,11 +30,17 @@ from .logging_setup import setup_logging
 from .notify import send_mail
 from .sms_budget import SmsBudget
 from .teltonika import TeltonikaClient
-from .zammad import ZammadClient
+from .zammad import ZammadClient, ZammadUnavailable
+from .zammad_outage import ZammadOutageTracker
 
 
 def _run_direction(
-    name: str, config: Config, dry_run: bool, fix: bool = False, scope: str | None = None
+    name: str,
+    config: Config,
+    dry_run: bool,
+    fix: bool = False,
+    scope: str | None = None,
+    outage: ZammadOutageTracker | None = None,
 ) -> None:
     if name == "reset-access":
         # Rein lokal, bewusst VOR dem Anlegen der Router-/Zammad-Clients:
@@ -58,7 +64,9 @@ def _run_direction(
         return
 
     teltonika = TeltonikaClient(config.teltonika)
-    zammad = ZammadClient(config.zammad)
+    zammad = ZammadClient(
+        config.zammad, on_reachable=outage.record_reachable if outage is not None else None
+    )
 
     if name == "balance-check":
         # Zammad-Client wird fuer die USSD-Methode gebraucht (synchrones
@@ -149,6 +157,23 @@ def main() -> None:
             config, notification=dataclasses.replace(config.notification, enabled=False)
         )
 
+    # Im Dry-Run bewusst kein Ausfall-Zustand: er darf weder den
+    # Ausfall-Timer der produktiven Laeufe starten noch einen laufenden
+    # Ausfall beenden (die Entwarnungsmail waere im Dry-Run unterdrueckt).
+    outage = (
+        None
+        if args.dry_run
+        else ZammadOutageTracker(
+            SmsBudget(
+                config.ticket_to_sms.stats_db_file,
+                config.ticket_to_sms.max_sms_per_hour,
+                config.ticket_to_sms.max_sms_per_24h,
+            ),
+            config.notification,
+            config.zammad.outage_notify_after_minutes,
+        )
+    )
+
     try:
         _run_direction(
             args.command,
@@ -156,7 +181,16 @@ def main() -> None:
             args.dry_run,
             fix=getattr(args, "fix", False),
             scope=getattr(args, "scope", None),
+            outage=outage,
         )
+    except ZammadUnavailable as exc:
+        # Kein Traceback, und die Mail erst nach laengerem Ausfall -- siehe
+        # zammad_outage.py. Exit 0 waehrend der Karenzzeit, damit auch
+        # crons MAILTO still bleibt.
+        if outage is None:
+            logger.error("%s: Zammad nicht erreichbar: %s", args.command, exc)
+            sys.exit(1)
+        sys.exit(1 if outage.record_unavailable(exc, args.command) else 0)
     except setup_check.SetupProblem as exc:
         # Kein Traceback: die Meldung ist bereits ein vollstaendiger,
         # lesbarer Diagnosebericht (siehe setup_check.py), kein

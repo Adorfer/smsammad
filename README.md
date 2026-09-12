@@ -1178,6 +1178,39 @@ ist bewusst breiter als nötig, um überhaupt Treffer zu bekommen.
 Copy-Paste-Fehler (`zammad.add_tag`/`zammad.remove_tag`). Live als 404
 aufgefallen, als `remove_tag` anfangs ebenfalls `POST` nutzte.
 
+### Zammad-Ausfälle: Wiederholung und gedämpfte Fehlermail
+
+Live beobachtet während eines Updates des Zammad-Hosts: der vorgeschaltete
+nginx lieferte `502 Bad Gateway`, weil der Railsserver gerade neu startete
+— `ticket-to-sms` brach mit Traceback samt Fehlermail ab. Bei
+5-Minuten-Cron hätte jeder Task während eines längeren Updates pro Lauf
+eine solche Mail erzeugt, obwohl nichts kaputt war.
+
+- **`ZammadUnavailable`** (`zammad.py`) für Verbindungsfehler/Timeouts und
+  HTTP 502/503/504 — ohne die HTML-Fehlerseite des Proxys im Text. Bewusst
+  **keine** Unterklasse von `ZammadError`: die vielen `except
+  ZammadError`-Zweige (Gruppen-Fallback, `check-setup`-Diagnosen) sind für
+  echte API-Antworten gedacht und dürfen einen Ausfall nicht als
+  fachlichen Befund umdeuten.
+- **Lesende Anfragen** (GET) werden bei einem Ausfall zweimal wiederholt
+  (nach 10 s / 30 s). **Schreibende bewusst nicht**: bei einem 502 ist
+  unklar, ob Zammad sie schon verarbeitet hat.
+- **Mail erst nach längerem Ausfall** (`zammad_outage.py`,
+  `[zammad] outage_notify_after_minutes`, Default 20): der Beginn des
+  Ausfalls wird in der SQLite-DB festgehalten. Bis dahin nur Log-Eintrag
+  und Exit 0 — auch cron-`MAILTO` bleibt still. Danach **genau eine** Mail
+  pro Ausfall, task-übergreifend (atomar in der DB, `ticket-to-sms` und
+  `sms-to-ticket` laufen ja parallel), und bei der ersten erfolgreichen
+  Zammad-Antwort **genau eine** Entwarnung. Ein kurzer Aussetzer ohne Mail
+  endet still.
+- **Nichts geht verloren**: ein abgebrochener Lauf lässt Tickets mit Tag
+  `sms-out` und noch nicht verarbeitete SMS auf dem Router liegen; der
+  nächste Lauf holt sie nach. Die Pro-Ticket-/Pro-SMS-Schleifen brechen bei
+  einem Ausfall sofort ab, statt ihn pro Element erneut zu probieren.
+- Im **Dry-Run** wird kein Ausfall-Zustand geschrieben oder gelöscht — er
+  darf weder den Timer der produktiven Läufe starten noch einen laufenden
+  Ausfall beenden (die Entwarnungsmail wäre im Dry-Run unterdrückt).
+
 ### Zammad-Trigger: warum `sender == Agent` zwingend nötig ist
 
 Zammad hat keinen nativen SMS-Kanal. Die etablierte Konvention: Agenten

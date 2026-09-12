@@ -198,3 +198,59 @@ def test_reset_access_clears_block_without_touching_router_or_zammad(monkeypatch
     main()
 
     assert SmsBudget(db_file, 20, 100).list_access_blocks() == []
+
+
+def _config_with_db(tmp_path):
+    db_file = tmp_path / "stats.db"
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(
+        CONFIG_INI + f'\n[ticket_to_sms]\nstats_db_file = "{db_file}"\n', encoding="utf-8"
+    )
+    config_path.chmod(0o600)
+    return config_path
+
+
+def test_short_zammad_outage_exits_zero_without_mail(monkeypatch, tmp_path, caplog):
+    """Waehrend der Karenzzeit: kein Traceback, keine Mail, Exit 0 (auch
+    crons MAILTO bleibt still)."""
+    from smsammad.zammad import ZammadUnavailable
+
+    config_path = _config_with_db(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["smsammad", "--config", str(config_path), "ticket-to-sms"])
+
+    def boom(*args, **kwargs):
+        raise ZammadUnavailable("GET tickets/search -> HTTP 502 (Bad Gateway)")
+
+    monkeypatch.setattr(main_module, "_run_direction", boom)
+    sent = []
+    monkeypatch.setattr("smsammad.zammad_outage.send_mail", lambda *a, **k: sent.append(k))
+    monkeypatch.setattr(main_module, "send_mail", lambda *a, **k: sent.append(k))
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 0
+    assert sent == []
+    assert "Traceback" not in caplog.text
+
+
+def test_zammad_outage_in_dry_run_persists_nothing(monkeypatch, tmp_path):
+    from smsammad.sms_budget import SmsBudget
+    from smsammad.zammad import ZammadUnavailable
+
+    config_path = _config_with_db(tmp_path)
+    monkeypatch.setattr(
+        sys, "argv", ["smsammad", "--config", str(config_path), "--dry-run", "ticket-to-sms"]
+    )
+
+    def boom(*args, **kwargs):
+        raise ZammadUnavailable("GET tickets/search -> HTTP 502 (Bad Gateway)")
+
+    monkeypatch.setattr(main_module, "_run_direction", boom)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 1  # Dry-Run ist interaktiv: Fehler sichtbar machen
+    budget = SmsBudget(tmp_path / "stats.db", 20, 100)
+    assert budget.claim_zammad_outage_notification() is True  # nichts vorab belegt

@@ -377,6 +377,50 @@ class SmsBudget:
             conn.execute("DELETE FROM meta WHERE key = ?", (self._fp_key(scope),))
         return deleted > 0
 
+    # Zammad-Ausfall-Zustand (siehe zammad_outage.py), in der meta-Tabelle
+    # -- keine Schema-Aenderung an der produktiven DB noetig. Alle
+    # Uebergaenge atomar per INSERT OR IGNORE / DELETE-rowcount: die Tasks
+    # ticket-to-sms und sms-to-ticket laufen per Cron parallel (flock nur
+    # je Task) und duerfen die Ausfall-/Entwarnungsmail nicht beide senden.
+    _OUTAGE_SINCE = "zammad_outage_since"
+    _OUTAGE_NOTIFIED = "zammad_outage_notified_at"
+
+    def mark_zammad_outage_start(self, now: datetime | None = None) -> datetime:
+        """Beginn des laufenden Ausfalls festhalten (nur beim ersten
+        Fehlschlag, spaetere lassen ihn unveraendert) und zurueckgeben."""
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                (self._OUTAGE_SINCE, now.isoformat()),
+            )
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (self._OUTAGE_SINCE,)
+            ).fetchone()
+        return datetime.fromisoformat(row[0])
+
+    def claim_zammad_outage_notification(self, now: datetime | None = None) -> bool:
+        """True genau fuer den EINEN Aufrufer, der die Ausfall-Mail senden
+        darf; alle weiteren (gleicher Ausfall) bekommen False."""
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            inserted = conn.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                (self._OUTAGE_NOTIFIED, now.isoformat()),
+            ).rowcount
+        return inserted == 1
+
+    def clear_zammad_outage(self) -> bool:
+        """Ausfall beendet: Zustand loeschen. True, wenn fuer diesen Ausfall
+        eine Mail verschickt worden war (dann ist eine Entwarnung faellig)
+        -- ebenfalls nur fuer genau einen Aufrufer."""
+        with self._connect() as conn:
+            notified = conn.execute(
+                "DELETE FROM meta WHERE key = ?", (self._OUTAGE_NOTIFIED,)
+            ).rowcount
+            conn.execute("DELETE FROM meta WHERE key = ?", (self._OUTAGE_SINCE,))
+        return notified == 1
+
     def mark_balance_queried(self, now: datetime | None = None) -> None:
         """Nur nach einer tatsaechlich gesendeten SMS-Guthabenabfrage
         aufrufen (siehe should_query_balance) -- NICHT nach einer

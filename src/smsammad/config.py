@@ -107,6 +107,13 @@ class ZammadConfig:
     # config.ini wieder hart abschalten, falls sich z.B. Zammads
     # Trigger-/Berechtigungs-API in einem Update aendert.
     self_manage_setup: bool = False
+    # Ist Zammad voruebergehend nicht erreichbar (502/503/504, Verbindungs-
+    # fehler -- z.B. waehrend eines Updates des Zammad-Hosts), geht die
+    # Fehlermail erst raus, wenn der Ausfall mindestens so lange am Stueck
+    # besteht. Kuerzere Aussetzer werden nur geloggt. Pro Ausfall genau
+    # eine Mail, bei Wiederherstellung eine Entwarnung. 0 = sofort mailen
+    # (wie frueher). Siehe zammad_outage.py.
+    outage_notify_after_minutes: int = 20
 
 
 @dataclass
@@ -338,7 +345,15 @@ def load_config(path: Path | None = None) -> Config:
                 parser, "zammad", "group_from_last_ticket", fallback=False
             ),
             self_manage_setup=_get_bool(parser, "zammad", "self_manage_setup", fallback=False),
+            outage_notify_after_minutes=_get_int(
+                parser, "zammad", "outage_notify_after_minutes", fallback=20
+            ),
         )
+        if zammad.outage_notify_after_minutes < 0:
+            raise ConfigError(
+                f"Fehlerhafte Config {path}: zammad.outage_notify_after_minutes darf nicht "
+                f"negativ sein (0 = sofort mailen), ist {zammad.outage_notify_after_minutes}"
+            )
         stats_db_file_raw = _get(
             parser, "ticket_to_sms", "stats_db_file", fallback=str(DEFAULT_STATS_DB_FILE)
         )

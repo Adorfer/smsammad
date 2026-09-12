@@ -272,4 +272,12 @@ open_state_id = 2
 ; gesetzt werden, um das Feature komplett zu deaktivieren (z.B. falls
 ; sich Zammads Trigger-/Berechtigungs-API in einem Update aendert).
 self_manage_setup = false
+; Ist Zammad voruebergehend nicht erreichbar (HTTP 502/503/504 oder
+; Verbindungsfehler, z.B. waehrend eines Updates/Neustarts des Zammad-
+; Hosts), geht die Fehlermail erst raus, wenn der Ausfall mindestens so
+; viele Minuten am Stueck besteht -- kuerzere Aussetzer werden nur geloggt
+; (Exit 0, auch cron bleibt still). Pro Ausfall genau eine Mail, bei
+; Wiederherstellung eine Entwarnung. Lesende Anfragen werden zusaetzlich
+; vorher schon zweimal wiederholt (10s/30s). 0 = sofort mailen.
+outage_notify_after_minutes = 20
 
