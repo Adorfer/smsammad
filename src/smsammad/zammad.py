@@ -1,18 +1,47 @@
 """Client fuer die Zammad-REST-API (nur die fuer diese Kopplung noetigen Teile)."""
 
+import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
 from .config import ZammadConfig
 from .phone import PhoneNumberError, to_e164, to_human_readable
 
+logger = logging.getLogger("smsammad")
+
 
 class ZammadError(Exception):
     pass
+
+
+class ZammadUnavailable(Exception):
+    """Zammad voruebergehend nicht erreichbar: Verbindungsfehler/Timeout
+    oder HTTP 502/503/504 vom vorgeschalteten Reverse-Proxy -- live
+    beobachtet waehrend eines Updates des Zammad-Hosts (nginx lieferte
+    "502 Bad Gateway", weil der Railsserver neu startete).
+
+    Bewusst KEINE Unterklasse von ZammadError: die vielen `except
+    ZammadError`-Zweige (Fallback auf die Default-Gruppe in
+    sms_to_ticket, Diagnosen in setup_check, ...) sind fuer echte
+    API-Antworten gedacht und duerfen einen Ausfall nicht als fachlichen
+    Befund umdeuten. Er soll bis main.py durchschlagen, wo die Fehlermail
+    gedaempft wird (siehe zammad_outage.py)."""
+
+
+# Antworten, die bedeuten "Zammad selbst hat gar nicht geantwortet" (der
+# Reverse-Proxy davor schon) -- im Unterschied zu echten API-Fehlern.
+_TRANSIENT_STATUS = frozenset({502, 503, 504})
+
+# Wartezeiten zwischen den Versuchen fuer LESENDE Anfragen (GET). Deckt
+# kurze Aussetzer ab (Container-Neustart); laengere Ausfaelle faengt die
+# Mail-Daempfung in zammad_outage.py ab. Schreibende Anfragen werden
+# bewusst NICHT wiederholt: bei einem 502 ist unklar, ob Zammad sie schon
+# verarbeitet hat (doppelte Artikel/Tickets waeren die Folge).
+_GET_RETRY_DELAYS_SECONDS = (10, 30)
 
 
 def _normalize_for_dedup(value: str) -> str:
@@ -88,20 +117,59 @@ class Ticket:
 
 
 class ZammadClient:
-    def __init__(self, config: ZammadConfig, timeout: float = 15.0) -> None:
+    def __init__(
+        self,
+        config: ZammadConfig,
+        timeout: float = 15.0,
+        on_reachable: Callable[[], None] | None = None,
+    ) -> None:
+        """`on_reachable`: wird beim ersten Mal aufgerufen, wenn Zammad
+        tatsaechlich geantwortet hat (auch mit einem fachlichen 4xx) --
+        beendet einen ggf. laufenden Ausfall-Zustand, siehe
+        zammad_outage.py."""
         self._config = config
         self._timeout = timeout
         self._base_url = config.url.rstrip("/") + "/api/v1"
         self._session = requests.Session()
         self._session.headers["Authorization"] = f"Token token={config.token}"
         self._group_name_cache: dict[int, str] = {}
+        self._on_reachable = on_reachable
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        delays = _GET_RETRY_DELAYS_SECONDS if method == "GET" else ()
+        for attempt, delay in enumerate((*delays, None), start=1):
+            try:
+                return self._request_once(method, path, **kwargs)
+            except ZammadUnavailable as exc:
+                if delay is None:
+                    raise
+                logger.warning(
+                    "Zammad voruebergehend nicht erreichbar (%s) -- Versuch %d/%d, "
+                    "naechster in %ds",
+                    exc,
+                    attempt,
+                    len(delays) + 1,
+                    delay,
+                )
+                time.sleep(delay)
+        raise AssertionError("unreachable")  # Schleife liefert oder wirft immer vorher
+
+    def _request_once(self, method: str, path: str, **kwargs: Any) -> Any:
         url = f"{self._base_url}/{path.lstrip('/')}"
         try:
             response = self._session.request(method, url, timeout=self._timeout, **kwargs)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            raise ZammadUnavailable(f"{method} {path}: {type(exc).__name__}") from exc
         except requests.RequestException as exc:
             raise ZammadError(f"{method} {path} fehlgeschlagen: {exc}") from exc
+        if response.status_code in _TRANSIENT_STATUS:
+            # Ohne Body: das ist nur die HTML-Fehlerseite des Proxys.
+            raise ZammadUnavailable(
+                f"{method} {path} -> HTTP {response.status_code} ({response.reason})"
+            )
+        if self._on_reachable is not None:
+            on_reachable, self._on_reachable = self._on_reachable, None  # nur einmal pro Lauf
+            on_reachable()
         if not response.ok:
             raise ZammadError(f"{method} {path} -> HTTP {response.status_code}: {response.text}")
         if response.text:

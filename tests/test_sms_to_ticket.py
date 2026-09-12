@@ -663,3 +663,21 @@ def test_balance_reply_dry_run_makes_no_changes():
     assert zammad.customers_created == []
     assert budget.balances == []
     assert teltonika.deleted == []
+
+
+def test_zammad_outage_inside_sms_loop_propagates_and_keeps_sms(monkeypatch):
+    """Wie bei ticket_to_sms: Typ bleibt erhalten, und die SMS wird NICHT
+    vom Router geloescht (naechster Lauf verarbeitet sie erneut)."""
+    from smsammad.zammad import ZammadUnavailable
+
+    teltonika = FakeTeltonika([SmsMessage(index=4, sender="0151 12345678", text="Hallo")])
+
+    def fake_process_one(*args):
+        raise ZammadUnavailable("POST tickets -> HTTP 502 (Bad Gateway)")
+
+    monkeypatch.setattr(sms_to_ticket, "_process_one", fake_process_one)
+
+    with pytest.raises(ZammadUnavailable):
+        sms_to_ticket.run(teltonika, FakeZammad(), _config(), dry_run=False, budget=FakeBudget())
+
+    assert teltonika.deleted == []

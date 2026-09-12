@@ -10,7 +10,7 @@ from .logging_setup import redact_content
 from .phone import PhoneNumberError, to_e164
 from .sms_budget import SmsBudget
 from .teltonika import TeltonikaAuthError, TeltonikaClient
-from .zammad import ZammadClient, ZammadError
+from .zammad import ZammadClient, ZammadError, ZammadUnavailable
 
 logger = logging.getLogger("smsammad")
 
@@ -98,6 +98,12 @@ def run(
     for message in messages:
         try:
             _process_one(message, teltonika, zammad, config, dry_run, budget)
+        except ZammadUnavailable:
+            # Ganzen Lauf abbrechen: betrifft alle folgenden SMS genauso.
+            # Die SMS bleibt dabei auf dem Router (geloescht wird erst nach
+            # erfolgreicher Ticket-Anlage) und wird im naechsten Lauf erneut
+            # verarbeitet -- nichts geht verloren.
+            raise
         except Exception:
             failures += 1
             logger.exception("sms_to_ticket: Verarbeitung von SMS #%s fehlgeschlagen", message.index)

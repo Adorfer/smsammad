@@ -20,7 +20,7 @@ from .sms_encoding import (
 )
 from .sms_split import split_for_sms, truncate_to_cost
 from .teltonika import TeltonikaAuthError, TeltonikaClient, TeltonikaError
-from .zammad import ZammadClient
+from .zammad import ZammadClient, ZammadUnavailable
 
 logger = logging.getLogger("smsammad")
 
@@ -61,12 +61,12 @@ def run(
     for ticket_id in ticket_ids:
         try:
             _process_one(ticket_id, zammad, teltonika, config, dry_run, budget, budget_blocked)
-        except access_guard.AccessBlocked:
+        except (access_guard.AccessBlocked, ZammadUnavailable):
             # Sofort abbrechen statt als Ticket-Einzelfehler zu zaehlen:
-            # ein Auth-/Sperr-Problem betrifft ALLE folgenden Tickets
-            # gleichermassen -- weiterzumachen wuerde nur unnoetige
-            # Zugriffsversuche gegen die (bereits gesperrte) Gegenstelle
-            # produzieren, statt den Lauf sauber zu beenden.
+            # ein Auth-/Sperr-Problem bzw. ein Zammad-Ausfall betrifft ALLE
+            # folgenden Tickets gleichermassen -- weiterzumachen wuerde nur
+            # unnoetige Zugriffsversuche gegen die Gegenstelle produzieren,
+            # und main.py braucht den urspruenglichen Typ (Mail-Daempfung).
             raise
         except Exception:
             failures += 1

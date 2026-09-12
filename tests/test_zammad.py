@@ -2,10 +2,11 @@ import json
 from unittest.mock import patch
 
 import pytest
+import requests
 import responses
 
 from smsammad.config import ZammadConfig
-from smsammad.zammad import _FALLBACK_TOKEN_LENGTHS, ZammadClient, ZammadError
+from smsammad.zammad import _FALLBACK_TOKEN_LENGTHS, ZammadClient, ZammadError, ZammadUnavailable
 
 BASE = "https://zammad.example.local/api/v1"
 
@@ -453,3 +454,103 @@ def test_set_subject(client):
     client.set_subject(5, "SMS-Guthaben")
     payload = json.loads(responses.calls[-1].request.body)
     assert payload == {"title": "SMS-Guthaben"}
+
+
+@responses.activate
+def test_get_retries_on_bad_gateway_and_succeeds(client):
+    """Kurzer Zammad-Aussetzer (Container-Neustart hinter nginx): der
+    Lesezugriff wird wiederholt statt sofort zu scheitern."""
+    responses.add(responses.GET, f"{BASE}/tickets/search", status=502, body="<html>Bad Gateway</html>")
+    responses.add(responses.GET, f"{BASE}/tickets/search", json=[{"id": 5}])
+
+    assert client.search_tickets_by_tag("sms-out") == [5]
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_get_raises_unavailable_after_all_retries(client):
+    for _ in range(3):
+        responses.add(responses.GET, f"{BASE}/tickets/search", status=503)
+
+    with pytest.raises(ZammadUnavailable) as excinfo:
+        client.search_tickets_by_tag("sms-out")
+
+    assert len(responses.calls) == 3  # 1 Versuch + 2 Wiederholungen
+    assert "HTML" not in str(excinfo.value) and "503" in str(excinfo.value)
+
+
+@responses.activate
+def test_unavailable_is_not_a_zammad_error(client):
+    """Die vielen `except ZammadError`-Zweige (Gruppen-Fallback,
+    setup_check-Diagnosen) duerfen einen Ausfall NICHT abfangen."""
+    for _ in range(3):
+        responses.add(responses.GET, f"{BASE}/tickets/search", status=502)
+
+    with pytest.raises(ZammadUnavailable):
+        try:
+            client.search_tickets_by_tag("sms-out")
+        except ZammadError:
+            pytest.fail("ZammadUnavailable wurde als ZammadError gefangen")
+
+
+@responses.activate
+def test_write_request_is_not_retried_on_bad_gateway(client):
+    """Bei einem 502 ist unklar, ob Zammad den Schreibzugriff schon
+    verarbeitet hat -- kein Retry, sonst drohen doppelte Artikel."""
+    responses.add(responses.POST, f"{BASE}/tags/add", status=502)
+
+    with pytest.raises(ZammadUnavailable):
+        client.add_tag(1, "sms-sent")
+
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_connection_error_counts_as_unavailable(client):
+    for _ in range(3):
+        responses.add(
+            responses.GET, f"{BASE}/tickets/search",
+            body=requests.exceptions.ConnectionError("connection refused"),
+        )
+
+    with pytest.raises(ZammadUnavailable):
+        client.search_tickets_by_tag("sms-out")
+
+
+@responses.activate
+def test_real_api_error_is_still_zammad_error(client):
+    responses.add(responses.GET, f"{BASE}/tickets/search", status=422, json={"error": "kaputt"})
+
+    with pytest.raises(ZammadError):
+        client.search_tickets_by_tag("sms-out")
+
+    assert len(responses.calls) == 1  # fachlicher Fehler: kein Retry
+
+
+@responses.activate
+def test_on_reachable_called_once_even_for_api_error(config):
+    """Auch ein fachlicher 4xx beweist, dass Zammad antwortet -- beendet
+    einen laufenden Ausfall-Zustand. Pro Client nur einmal."""
+    calls = []
+    client = ZammadClient(config, on_reachable=lambda: calls.append(1))
+    responses.add(responses.GET, f"{BASE}/tickets/search", status=422, json={})
+    responses.add(responses.GET, f"{BASE}/tickets/search", json=[])
+
+    with pytest.raises(ZammadError):
+        client.search_tickets_by_tag("x")
+    client.search_tickets_by_tag("x")
+
+    assert calls == [1]
+
+
+@responses.activate
+def test_on_reachable_not_called_while_unavailable(config):
+    calls = []
+    client = ZammadClient(config, on_reachable=lambda: calls.append(1))
+    for _ in range(3):
+        responses.add(responses.GET, f"{BASE}/tickets/search", status=502)
+
+    with pytest.raises(ZammadUnavailable):
+        client.search_tickets_by_tag("x")
+
+    assert calls == []

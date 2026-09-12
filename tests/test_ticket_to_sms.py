@@ -1004,3 +1004,24 @@ def test_send_note_has_no_alarm_hint_when_balance_not_configured():
 
     note_body = zammad.internal_notes[0][1]
     assert "SMS-Guthaben ist sehr niedrig" not in note_body
+
+
+def test_zammad_outage_inside_ticket_loop_propagates_unchanged(monkeypatch):
+    """Ein Zammad-Ausfall mitten in der Ticket-Schleife darf NICHT in ein
+    'N von M Tickets fehlgeschlagen'-RuntimeError umgewandelt werden --
+    main.py braucht den urspruenglichen Typ fuer die Mail-Daempfung."""
+    from smsammad.zammad import ZammadUnavailable
+
+    zammad = FakeZammad(tickets={1: {"id": 1}, 2: {"id": 2}}, users={}, articles={})
+    processed = []
+
+    def fake_process_one(ticket_id, *args):
+        processed.append(ticket_id)
+        raise ZammadUnavailable("GET tickets/1 -> HTTP 502 (Bad Gateway)")
+
+    monkeypatch.setattr(ticket_to_sms, "_process_one", fake_process_one)
+
+    with pytest.raises(ZammadUnavailable):
+        ticket_to_sms.run(zammad, FakeTeltonika(), _config(), dry_run=False, budget=FakeBudget())
+
+    assert processed == [1]  # sofort abgebrochen, Ticket 2 nicht mehr versucht
