@@ -912,6 +912,16 @@ zusätzlich manuell vor jeder als "fertig" markierten Änderung (siehe
 Commit-/Entwicklungshistorie) — Dry-Run zuerst, danach ein bewusster
 einzelner echter Lauf.
 
+Zeitzonen: GitHub Actions läuft in UTC. Tests mit Uhrzeiten berechnen den
+erwarteten Wert über dieselbe `astimezone()`-Umrechnung wie der Code und
+schreiben ihn nie als CET/CEST-Literal hin (ein solcher Test brach einmal
+nur auf dem Runner).
+
+Experiment, nicht auf `main`: Branch `zammad-connector-experiment` mit
+einem nativen Zammad-SMS-Connector für Teltonika (Agenten nutzen dann die
+SMS-Sprechblase statt des Anruf-Tabs). Stand und Prüfschritte in
+`zammad-connector/README.md` auf diesem Branch.
+
 </details>
 
 <details>
@@ -1163,16 +1173,36 @@ Absender-IDs (z.B. `"CALLYA"`) ohne Sonderfall im Zammad-Kundendatensatz.
 
 ### Zammad-Suchtokenisierung
 
-Zammads Volltextsuche (`/api/v1/users/search`) tokenisiert Werte an
-nicht-alphanumerischen Zeichen und matcht nur **ganze Tokens**. Eine
-durchgehende Ziffernfolge wie `"491721234567"` trifft deshalb **nicht**
-auf einen als `"+49 172 1234567"` gespeicherten Wert — dort ist
-`"1234567"` das relevante Token. `zammad._search_token()` extrahiert
-deshalb das letzte alphanumerische Token, die Suche läuft mit
-beidseitigem Wildcard (`*token*`), und die Kandidaten werden anschließend
-clientseitig über `_phone_matches()` eindeutig verifiziert (erst exakter
-Treffer, dann `phonenumbers`-normalisierter Vergleich) — die Suche selbst
-ist bewusst breiter als nötig, um überhaupt Treffer zu bekommen.
+Zammads Volltextsuche (`/api/v1/users/search`) tokenisiert Werte (live
+verifiziert) **nur an Leerzeichen**; `-` und `.` bleiben Teil desselben
+Tokens. Gematcht werden nur **ganze Tokens**. Eine durchgehende
+Ziffernfolge wie `"491721234567"` trifft deshalb **nicht** auf einen als
+`"+49 172 1234567"` gespeicherten Wert — dort ist `"1234567"` das
+relevante Token. `zammad._search_token()` extrahiert deshalb das letzte
+Token, die Suche läuft mit beidseitigem Wildcard (`*token*`), und die
+Kandidaten werden anschließend clientseitig über `_phone_matches()`
+eindeutig verifiziert (erst exakter Treffer, dann
+`phonenumbers`-normalisierter Vergleich) — die Suche selbst ist bewusst
+breiter als nötig, um überhaupt Treffer zu bekommen.
+
+Folgen:
+
+- **Selbst angelegte Kunden** bekommen ihre Nummer mit `-` statt
+  Leerzeichen gruppiert (`phone.to_human_readable()`, `0172-1234-4567`).
+  Mit Leerzeichen fände die nächste SMS den Kunden nicht wieder, sobald
+  die gesuchten Endziffern eine Gruppengrenze überqueren — bei einer
+  deutschen Mobilnummer in Vierergruppen praktisch immer.
+- **Alt- oder von Hand mit Leerzeichen eingetragene Kunden:** Bleibt die
+  Hauptsuche leer, sucht `find_customer_by_phone()` mit kürzeren
+  Endziffern nach (`_FALLBACK_TOKEN_LENGTHS = (4, 3, 2)`). Eine
+  Mindestlänge für Token gibt es nicht, auch einstellige Token treffen.
+- **`users/search` kappt ohne `limit` stillschweigend bei 50 Treffern**
+  (live: `*9*` lieferte 50, mit `limit=500` 195). Gerade die kurzen
+  Fallback-Token treffen viele Kunden, deshalb `_USER_SEARCH_LIMIT = 500`.
+- **Der Suchindex ist nur near-realtime.** Bei Tests gegen eine echte
+  Instanz immer mit Wartezeit/Wiederholung prüfen und für jeden Versuch
+  frische, nie benutzte Ziffern nehmen; sonst täuschen veraltete
+  Indexeinträge Treffer oder Grenzen vor, die es nicht gibt.
 
 ### Zammad-Tag-API-Asymmetrie
 
