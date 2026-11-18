@@ -107,6 +107,11 @@ _FALLBACK_TOKEN_LENGTHS = (4, 3, 2)
 # einfach aus der Ergebnisliste, ohne jede Fehlermeldung.
 _USER_SEARCH_LIMIT = 500
 
+# tickets/search: Default-Limit 50, hartes Maximum 200 (live verifiziert).
+_TICKET_SEARCH_LIMIT = 200
+_CLOSED_STATES = ("closed", "merged")
+_CLOSED_QUERY = " OR ".join(_CLOSED_STATES)
+
 
 @dataclass
 class Ticket:
@@ -320,15 +325,26 @@ class ZammadClient:
         return None
 
     def find_open_ticket_for_customer(self, customer_id: int) -> Ticket | None:
+        """Offen-Filter bewusst SERVERSEITIG in der Suchanfrage: tickets/search
+        liefert ohne `limit` nur die 50 zuletzt geaenderten Tickets (Maximum
+        200, live verifiziert). Bei Kunden mit Hunderten geschlossener Tickets
+        (live: mehrere Kunden mit >200 Tickets, davon 2 offen) laege das
+        offene Ticket sonst oft ausserhalb des Fensters, und eine neue SMS
+        wuerde ein neues Ticket eroeffnen statt am offenen anzuhaengen. Der
+        clientseitige Filter bleibt als Absicherung."""
         results = (
             self._request(
                 "GET",
                 "tickets/search",
-                params={"query": f"customer_id:{customer_id}", "expand": "true"},
+                params={
+                    "query": f"customer_id:{customer_id} AND NOT state.name:({_CLOSED_QUERY})",
+                    "expand": "true",
+                    "limit": _TICKET_SEARCH_LIMIT,
+                },
             )
             or []
         )
-        open_tickets = [t for t in results if t.get("state") not in ("closed", "merged")]
+        open_tickets = [t for t in results if t.get("state") not in _CLOSED_STATES]
         if not open_tickets:
             return None
         newest = max(open_tickets, key=lambda t: t.get("last_contact_at") or "")

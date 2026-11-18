@@ -344,6 +344,17 @@ def test_find_open_ticket_picks_newest_last_contact(client):
 
 
 @responses.activate
+def test_find_open_ticket_filters_server_side_with_limit(client):
+    """Ohne serverseitigen Offen-Filter laege das offene Ticket eines Kunden
+    mit vielen geschlossenen Tickets ausserhalb der 50er-Standardseite."""
+    responses.add(responses.GET, f"{BASE}/tickets/search", json=[])
+    client.find_open_ticket_for_customer(42)
+    params = responses.calls[0].request.params
+    assert params["query"] == "customer_id:42 AND NOT state.name:(closed OR merged)"
+    assert params["limit"] == "200"
+
+
+@responses.activate
 def test_find_open_ticket_none_when_all_closed(client):
     responses.add(
         responses.GET,
