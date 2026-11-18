@@ -19,7 +19,12 @@ from .sms_encoding import (
     encoding_cost,
 )
 from .sms_split import split_for_sms, truncate_to_cost
-from .teltonika import TeltonikaAuthError, TeltonikaClient, TeltonikaError
+from .teltonika import (
+    TeltonikaAuthError,
+    TeltonikaClient,
+    TeltonikaError,
+    TeltonikaSendUncertain,
+)
 from .zammad import ZammadClient, ZammadUnavailable
 
 logger = logging.getLogger("smsammad")
@@ -638,6 +643,15 @@ def _send(
                 config.teltonika.username, config.teltonika.password
             ),
         )
+    except TeltonikaSendUncertain as exc:
+        # Vermutlich doch gesendet -> fuers Budget mitzaehlen (lieber zu
+        # vorsichtig), aber KEIN Erfolgs-Vermerk: der Agent soll entscheiden.
+        budget.record_sent(credits, group=group_name, agent=agent, ticket_number=ticket_number)
+        _handle_send_uncertain(
+            ticket_id, ticket_number, current_state_id, current_title, number, parts, exc,
+            zammad, config,
+        )
+        return
     except TeltonikaError as exc:
         _handle_send_failed(
             ticket_id, ticket_number, current_state_id, current_title, exc, zammad, config
@@ -724,6 +738,35 @@ def _handle_send_failed(
         f"'{TAG_OUT}' erneut setzen, um einen neuen Versandversuch auszuloesen."
     )
     logger.error("Ticket %s: SMS-Versand fehlgeschlagen (%s)", ticket_number, error)
+    _mark_cannot_send(ticket_id, ticket_number, current_state_id, current_title, note, zammad, config)
+
+
+def _handle_send_uncertain(
+    ticket_id: int,
+    ticket_number: str,
+    current_state_id: int | None,
+    current_title: str | None,
+    number: str,
+    parts: list[str],
+    error: Exception,
+    zammad: ZammadClient,
+    config: Config,
+) -> None:
+    """Router hat die Anfrage angenommen, aber nicht rechtzeitig
+    geantwortet (TeltonikaSendUncertain). Die SMS ist dann haeufig trotzdem
+    zugestellt worden -- daher ausdruecklich KEINE Aufforderung zum
+    erneuten Senden wie bei _handle_send_failed."""
+    sent_text = "\n".join(f'"{part}"' for part in parts)
+    note = (
+        f"SMS-Versand an {_display_number(number, config.teltonika.default_country_code)}: "
+        f"Status UNKLAR ({error}).\n\n"
+        "Der Router hat die SMS angenommen, aber nicht rechtzeitig bestaetigt. "
+        "Erfahrungsgemaess wird sie in diesem Fall trotzdem zugestellt.\n"
+        "Bitte NICHT einfach erneut senden, sondern erst beim Kunden nachfragen, "
+        f"ob die SMS angekommen ist. Nur falls nicht: Tag '{TAG_OUT}' erneut setzen.\n\n"
+        f"Betroffener Text:\n{sent_text}"
+    )
+    logger.error("Ticket %s: SMS-Versand mit unklarem Ausgang (%s)", ticket_number, error)
     _mark_cannot_send(ticket_id, ticket_number, current_state_id, current_title, note, zammad, config)
 
 

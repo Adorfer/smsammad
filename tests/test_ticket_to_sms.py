@@ -14,7 +14,7 @@ from smsammad.config import (
 )
 from smsammad.access_guard import AccessBlocked
 from smsammad.sms_budget import GroupStat, SmsBudget
-from smsammad.teltonika import TeltonikaAuthError, TeltonikaError
+from smsammad.teltonika import TeltonikaAuthError, TeltonikaError, TeltonikaSendUncertain
 
 
 class FakeZammad:
@@ -824,6 +824,30 @@ def test_send_failure_marks_cannot_send_instead_of_crashing():
     assert budget.recorded == []
     assert len(zammad.internal_notes) == 1
     assert "no credit" in zammad.internal_notes[0][1]
+
+
+def test_send_uncertain_warns_agent_not_to_resend_and_counts_budget():
+    """Lese-Timeout beim Versand: SMS ist vermutlich doch raus. Kein
+    "fehlgeschlagen ... erneut setzen", sondern "Status unklar, erst
+    nachfragen" -- sonst Doppel-SMS. Budget wird vorsichtshalber belastet."""
+    zammad = FakeZammad(
+        tickets={1: {"id": 1, "number": "1001", "customer_id": 7}},
+        users={7: {"id": 7, "mobile": "0151 12345678"}},
+        articles={1: [_public_call("Text")]},
+    )
+    teltonika = FakeTeltonika(fail_with=TeltonikaSendUncertain("sms_send: keine Antwort"))
+    budget = FakeBudget()
+
+    ticket_to_sms.run(zammad, teltonika, _config(), dry_run=False, budget=budget)
+
+    assert zammad.sent_tags_removed == [(1, "sms-out")]
+    assert zammad.sent_tags_added == [(1, "sms-cannotsend")]
+    assert budget.recorded == [1]
+    note = zammad.internal_notes[0][1]
+    assert "UNKLAR" in note
+    assert "NICHT einfach erneut senden" in note
+    assert "+4915112345678" in note
+    assert '"Text"' in note
 
 
 def test_repeated_auth_failure_blocks_via_access_guard_instead_of_marking_cannotsend(tmp_path):

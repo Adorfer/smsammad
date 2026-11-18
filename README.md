@@ -540,6 +540,13 @@ python3 run.py check-setup --fix    # gefundene Luecken reparieren
   (Default `2` = "offen") gesetzt, damit das Problem nicht unbemerkt in
   einem inaktiven Ticket verschwindet. Agent behebt die Ursache und setzt
   `sms-out` danach erneut, um einen neuen Versandversuch auszulösen.
+  Sonderfall **Status unklar**: Antwortet der Router nicht innerhalb von
+  180 s auf `sms_send`, war die Anfrage schon bei ihm, und die SMS geht
+  erfahrungsgemäß trotzdem raus (live über 2 Minuten Verarbeitungszeit
+  beobachtet). Die Notiz sagt dann ausdrücklich „erst beim Kunden
+  nachfragen, nicht einfach erneut senden“, und das Budget wird
+  vorsichtshalber belastet. Ein Verbindungsfehler *vor* der Anfrage
+  bleibt ein normales „fehlgeschlagen“.
   Priorität/Status/Titel werden dabei in EINEM API-Aufruf gesetzt: Zammad
   validiert bei jedem Ticket-Update das gesamte Modell (nicht nur die
   geänderten Felder), ein Ticket mit leerem Titel (Zammad-UI zeigt "-")

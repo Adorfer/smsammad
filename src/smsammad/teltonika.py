@@ -50,6 +50,21 @@ class TeltonikaAuthError(TeltonikaError):
     kann, ohne den Antworttext zu parsen."""
 
 
+class TeltonikaSendUncertain(TeltonikaError):
+    """sms_send: die Anfrage ist beim Router angekommen, die Antwort blieb
+    aber aus (Lese-Timeout). Live beobachtet: der Router verarbeitet lange
+    Texte teils minutenlang und verschickt die SMS trotzdem. Eigener Typ,
+    damit der Agent einen "Status unklar"-Vermerk bekommt statt
+    "fehlgeschlagen" -- letzteres lud zum erneuten Senden ein und damit zur
+    Doppel-SMS beim Kunden."""
+
+
+# Live ueber 2 Minuten fuer einen sehr langen UCS-2-Text beobachtet (siehe
+# README); 180 s lassen dafuer Luft. Ein Cronlauf desselben Tasks wird per
+# flock uebersprungen, solange dieser noch laeuft (cron_run.sh).
+_SEND_TIMEOUT_SECONDS = 180.0
+
+
 @dataclass
 class SmsMessage:
     index: int
@@ -197,6 +212,13 @@ class TeltonikaClient:
                 timeout=timeout,
                 verify=self._config.verify_tls,
             )
+        except requests.ReadTimeout:
+            # Nur der LESE-Timeout ist "unklar": die Anfrage war schon beim
+            # Router. Ein Connect-Timeout/-Fehler heisst sicher "nicht
+            # gesendet" und bleibt ein normaler TeltonikaError.
+            raise TeltonikaSendUncertain(
+                f"{endpoint}: keine Antwort des Routers innerhalb von {timeout:.0f}s"
+            ) from None
         except requests.RequestException as exc:
             raise TeltonikaError(
                 f"Anfrage an {endpoint} fehlgeschlagen: {type(exc).__name__}"
@@ -211,9 +233,10 @@ class TeltonikaClient:
         Router laut Live-Tests ungewoehnlich lange verarbeiten (beobachtet:
         bis über 2 Minuten bei sehr langen UCS-2-Texten) -- daher ein
         deutlich groesseres Timeout als bei den uebrigen, immer schnellen
-        Endpunkten (sms_list/sms_read/sms_delete/sms_total).
+        Endpunkten (sms_list/sms_read/sms_delete/sms_total). Laeuft es
+        trotzdem ab: TeltonikaSendUncertain.
         """
-        send_timeout = max(self._timeout, 60.0)
+        send_timeout = max(self._timeout, _SEND_TIMEOUT_SECONDS)
         self._post("sms_send", send_timeout, number=number, text=text)
 
     def list_messages(self) -> list[SmsMessage]:

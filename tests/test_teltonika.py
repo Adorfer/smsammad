@@ -6,7 +6,7 @@ import requests
 import responses
 
 from smsammad.config import TeltonikaConfig
-from smsammad.teltonika import TeltonikaClient, TeltonikaError
+from smsammad.teltonika import TeltonikaClient, TeltonikaError, TeltonikaSendUncertain
 
 
 @pytest.fixture(autouse=True)
@@ -202,6 +202,39 @@ def test_send_never_retries_even_on_failure(client):
     with pytest.raises(TeltonikaError):
         client.send("0049151112345678", "hallo")
     assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_send_read_timeout_is_uncertain_not_retried(client):
+    """Lese-Timeout = Router hat die Anfrage, SMS evtl. schon raus."""
+    responses.add(
+        responses.POST,
+        "http://192.168.1.1/cgi-bin/sms_send",
+        body=requests.exceptions.ReadTimeout("read timed out"),
+    )
+    with pytest.raises(TeltonikaSendUncertain):
+        client.send("0049151112345678", "hallo")
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_send_connect_timeout_is_plain_error(client):
+    """Connect-Timeout = Anfrage nie angekommen -> normaler Fehler."""
+    responses.add(
+        responses.POST,
+        "http://192.168.1.1/cgi-bin/sms_send",
+        body=requests.exceptions.ConnectTimeout("connect timed out"),
+    )
+    with pytest.raises(TeltonikaError) as excinfo:
+        client.send("0049151112345678", "hallo")
+    assert not isinstance(excinfo.value, TeltonikaSendUncertain)
+
+
+def test_send_uses_long_timeout(client):
+    with patch("smsammad.teltonika.requests.post") as post:
+        post.return_value.status_code = 200
+        client.send("0049151112345678", "hallo")
+    assert post.call_args.kwargs["timeout"] >= 180
 
 
 @responses.activate
