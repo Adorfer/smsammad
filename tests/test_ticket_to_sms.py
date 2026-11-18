@@ -238,6 +238,8 @@ def test_sends_and_retags_on_success():
     assert note_internal is True
     assert "1 SMS" in note_body
     assert "an den Router uebergeben" in note_body
+    # Zielnummer steht in der Notiz, in E.164 (als ein Such-Token findbar)
+    assert note_body.startswith("SMS-Versand an +4915112345678: ")
     # exakter gesendeter Text muss in der Notiz stehen (Sanity-Check bei
     # Zeichenkonvertierung/Emoji), plus Zeichenzahl des Originaltexts.
     assert "11 Zeichen" in note_body  # "Kurzer Text" hat 11 Zeichen

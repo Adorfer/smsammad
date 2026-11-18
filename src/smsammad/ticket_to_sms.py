@@ -9,7 +9,7 @@ from .config import Config, TeltonikaConfig
 from .htmltext import html_to_text
 from .logging_setup import redact_content
 from .notify import send_mail
-from .phone import is_mobile_number, to_teltonika_format
+from .phone import PhoneNumberError, is_mobile_number, to_e164, to_teltonika_format
 from .sms_budget import SmsBudget
 from .sms_encoding import (
     GSM7_MULTIPART_MAX_TOTAL,
@@ -537,13 +537,18 @@ def _build_send_note(
     now_str: str,
     truncated_from: int | None,
     alarm_hint: str | None = None,
+    number: str | None = None,
+    default_region: str = "DE",
 ) -> str:
     # `credits` statt len(parts): im Multipart-Modus ist `parts` immer
     # EIN Element (ein API-Aufruf), `credits` zaehlt aber die echten
     # SMS-Segmente, die dieser Aufruf beim Provider kostet.
     parts_label = "1 SMS" if credits == 1 else f"{credits} SMS-Teile"
+    # Zielnummer in E.164 (ohne Leerzeichen): eindeutig auch fuer
+    # Auslandsnummern und in Zammads Volltextsuche als EIN Token findbar.
+    recipient = f" an {_display_number(number, default_region)}" if number else ""
     header = (
-        f"SMS-Versand: {len(text)} Zeichen, {parts_label} am {now_str} an den Router "
+        f"SMS-Versand{recipient}: {len(text)} Zeichen, {parts_label} am {now_str} an den Router "
         f"uebergeben (keine SMS-Quittung verfuegbar)."
     )
     sent_text = "\n".join(f'"{part}"' for part in parts)
@@ -558,6 +563,13 @@ def _build_send_note(
     if alarm_hint is not None:
         note = f"{note}\n\n{alarm_hint}"
     return note
+
+
+def _display_number(number: str, default_region: str) -> str:
+    try:
+        return to_e164(number, default_region)
+    except PhoneNumberError:
+        return number
 
 
 def _low_balance_hint(config: Config, budget: SmsBudget) -> str | None:
@@ -633,7 +645,16 @@ def _send(
         return
     now_str = datetime.now().astimezone().strftime("%d.%m.%Y %H:%M:%S")
     alarm_hint = _low_balance_hint(config, budget)
-    note = _build_send_note(text, parts, credits, now_str, truncated_from, alarm_hint)
+    note = _build_send_note(
+        text,
+        parts,
+        credits,
+        now_str,
+        truncated_from,
+        alarm_hint,
+        number=number,
+        default_region=config.teltonika.default_country_code,
+    )
     # Doppelversand-Sperre: der Versand ist erfolgt -- das SOFORT lokal
     # festhalten, BEVOR Zammad angefasst wird. Faellt Zammad jetzt aus,
     # bliebe sonst der Tag 'sms-out' stehen und der naechste Lauf wuerde

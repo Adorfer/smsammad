@@ -547,7 +547,8 @@ python3 run.py check-setup --fix    # gefundene Luecken reparieren
   scheitern -- SMSammad vergibt in diesem Fall automatisch einen
   Platzhalter-Titel (`"SMS-Ticket {Ticketnummer}"`) im selben Request.
 - **Versand-Quittung**: jede erfolgreich gesendete SMS bekommt eine
-  interne Notiz mit Zeichenzahl, Teilanzahl, Zeitstempel und dem exakt
+  interne Notiz mit Zielrufnummer (E.164, z. B. `+4915112345678`),
+  Zeichenzahl, Teilanzahl, Zeitstempel und dem exakt
   gesendeten Text (jeder Teil einzeln in `"..."`, damit Anfang/Ende klar
   erkennbar sind) — die Notiz bestätigt nur die Übergabe an den Router,
   eine **SMS-Quittung** (Zustellbestätigung durch die Teltonika-API) gibt
