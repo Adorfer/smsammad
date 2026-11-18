@@ -402,3 +402,16 @@ def test_prune_sent_articles_reports_only_stale_pending(tmp_path):
     assert budget.sent_article_state(2, 20) is None
     assert budget.sent_article_state(3, 30) is not None
     assert budget.sent_article_state(4, 40) is not None
+
+
+def test_received_sms_fingerprint_roundtrip_and_prune(tmp_path):
+    budget = SmsBudget(tmp_path / "s.db", 10, 100)
+    old = datetime.now(timezone.utc) - timedelta(days=31)
+    assert not budget.received_sms_seen("abc")
+    budget.record_received_sms("abc", now=old)
+    budget.record_received_sms("def")
+    budget.record_received_sms("abc")  # doppelt eintragen ist harmlos
+    assert budget.received_sms_seen("abc")
+    budget.prune_received_sms()
+    assert not budget.received_sms_seen("abc")
+    assert budget.received_sms_seen("def")

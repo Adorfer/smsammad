@@ -55,6 +55,17 @@ CREATE TABLE IF NOT EXISTS sent_articles (
     PRIMARY KEY (ticket_id, article_id)
 );
 
+-- Gegenstueck fuer eingehende SMS, siehe sms_to_ticket.py: eine SMS wird
+-- erst NACH der Uebernahme nach Zammad auf dem Router geloescht. Scheitert
+-- das Loeschen (oder bricht der Lauf dazwischen ab), steht sie im
+-- naechsten Lauf erneut auf dem Router. Der Fingerabdruck (Absender,
+-- Router-Zeitstempel, Text) verhindert dann ein zweites Ticket/einen
+-- zweiten Artikel -- die SMS wird nur noch geloescht.
+CREATE TABLE IF NOT EXISTS received_sms (
+    fingerprint TEXT PRIMARY KEY,
+    received_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS access_state (
     scope TEXT PRIMARY KEY,
     block_level INTEGER NOT NULL DEFAULT 0,
@@ -457,6 +468,33 @@ class SmsBudget:
                 ),
             )
         return [(t, a) for t, a in stale]
+
+    def record_received_sms(self, fingerprint: str, now: datetime | None = None) -> None:
+        """Direkt nach erfolgreicher Uebernahme nach Zammad, VOR dem
+        Loeschen auf dem Router."""
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO received_sms (fingerprint, received_at) VALUES (?, ?)",
+                (fingerprint, now.isoformat()),
+            )
+
+    def received_sms_seen(self, fingerprint: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM received_sms WHERE fingerprint = ?", (fingerprint,)
+            ).fetchone()
+        return row is not None
+
+    def prune_received_sms(
+        self, older_than: timedelta = timedelta(days=30), now: datetime | None = None
+    ) -> None:
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM received_sms WHERE received_at < ?",
+                ((now - older_than).isoformat(),),
+            )
 
     # Zammad-Ausfall-Zustand (siehe zammad_outage.py), in der meta-Tabelle
     # -- keine Schema-Aenderung an der produktiven DB noetig. Alle

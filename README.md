@@ -1281,6 +1281,28 @@ Mal** geschickt.
   Antwort und lokalem SQLite-Vermerk ab, fehlt der Vermerk — dieses
   Fenster ist rein lokal und nicht mehr an Zammads Verfügbarkeit gekoppelt.
 
+### Doppel-Übernahme-Sperre (eingehende SMS)
+
+Spiegelbild auf der Empfangsseite: `sms-to-ticket` löscht eine SMS erst
+**nach** der Übernahme nach Zammad vom Router. Scheiterte danach noch
+etwas (Zammad-Aussetzer bei der Gruppen-Abfrage für die Statistik, oder
+der überlastete Router lehnte das Löschen ab), stand die SMS im nächsten
+Lauf wieder da und landete ein **zweites Mal** als Ticket/Artikel in
+Zammad.
+
+- Nach dem Zammad-Schreibzugriff wird **sofort lokal** ein Fingerabdruck
+  vermerkt (`received_sms`: SHA-256 aus Absender, Router-Zeitstempel und
+  Text — bewusst ohne den Router-Index, der nach dem Löschen
+  wiederverwendet wird), dann die SMS gelöscht. Die Statistik-Abfragen
+  kommen erst danach und können den Lauf nicht mehr abbrechen.
+- Steht eine schon übernommene SMS erneut auf dem Router, wird sie nur
+  noch gelöscht (Warnung im Log), kein zweites Ticket.
+- Vermerke werden nach 30 Tagen aufgeräumt.
+- Restrisiko: liefert nginx beim **Schreibzugriff selbst** einen
+  Gateway-Fehler, obwohl Zammad dahinter gespeichert hat, ist das von
+  außen nicht unterscheidbar — die SMS bleibt dann auf dem Router und
+  wird erneut übernommen. Lieber doppelt als verloren.
+
 ### Zammad-Trigger: warum `sender == Agent` zwingend nötig ist
 
 Zammad hat keinen nativen SMS-Kanal. Die etablierte Konvention: Agenten

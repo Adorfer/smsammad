@@ -110,6 +110,16 @@ class FakeBudget:
     def __init__(self):
         self.received = []
         self.balances = []
+        self.taken_over = set()
+
+    def received_sms_seen(self, fingerprint):
+        return fingerprint in self.taken_over
+
+    def record_received_sms(self, fingerprint, now=None):
+        self.taken_over.add(fingerprint)
+
+    def prune_received_sms(self, older_than=None, now=None):
+        pass
 
     def record_received(self, group=None, ticket_number=None, now=None):
         self.received.append((group, ticket_number))
@@ -681,3 +691,87 @@ def test_zammad_outage_inside_sms_loop_propagates_and_keeps_sms(monkeypatch):
         sms_to_ticket.run(teltonika, FakeZammad(), _config(), dry_run=False, budget=FakeBudget())
 
     assert teltonika.deleted == []
+
+
+class _FailingDeleteTeltonika(FakeTeltonika):
+    def __init__(self, messages):
+        super().__init__(messages)
+        self.fail_delete = True
+
+    def delete(self, index):
+        if self.fail_delete:
+            from smsammad.teltonika import TeltonikaError
+
+            raise TeltonikaError("sms_delete: Router ueberlastet")
+        super().delete(index)
+
+
+def test_failed_router_delete_does_not_create_second_ticket_next_run():
+    """Doppel-Uebernahme-Sperre: Ticket angelegt, Loeschen auf dem Router
+    scheitert -> SMS steht im naechsten Lauf erneut da. Dann nur loeschen,
+    kein zweites Ticket."""
+    message = SmsMessage(index=4, sender="0151 12345678", text="Hallo", timestamp="Mon Nov 18")
+    teltonika = _FailingDeleteTeltonika([message])
+    zammad = FakeZammad()
+    budget = FakeBudget()
+
+    with pytest.raises(RuntimeError):
+        sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=budget)
+    assert len(zammad.created_tickets) == 1
+
+    teltonika.fail_delete = False
+    sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=budget)
+
+    assert len(zammad.created_tickets) == 1
+    assert teltonika.deleted == [4]
+
+
+def test_zammad_outage_after_article_still_deletes_sms_from_router():
+    """Faellt Zammad erst bei der Statistik-Abfrage (nach dem Anhaengen des
+    Artikels) aus, ist die SMS schon uebernommen: sie muss vom Router, der
+    Lauf darf nicht abbrechen."""
+    from smsammad.zammad import ZammadUnavailable
+
+    class Ticket:
+        id = 9
+        number = "1009"
+
+    class OutageAfterWrite(FakeZammad):
+        def get_ticket(self, ticket_id):
+            raise ZammadUnavailable("GET tickets/9 -> HTTP 502 (Bad Gateway)")
+
+    teltonika = FakeTeltonika([SmsMessage(index=3, sender="0151 12345678", text="Hallo")])
+    zammad = OutageAfterWrite(existing_customers={"+4915112345678": 42}, open_ticket=Ticket())
+    budget = FakeBudget()
+
+    sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=budget)
+
+    assert zammad.added_articles == [(9, "Hallo", False)]
+    assert teltonika.deleted == [3]
+    assert budget.received == [(None, "1009")]
+
+
+def test_same_text_from_same_sender_at_other_time_is_new_sms():
+    """Fingerabdruck enthaelt den Router-Zeitstempel: eine echte zweite SMS
+    mit gleichem Text ist KEINE Wiederholung."""
+    budget = FakeBudget()
+    zammad = FakeZammad()
+    for index, ts in ((1, "Mon Nov 18 10:00:00 2026"), (1, "Mon Nov 18 10:05:00 2026")):
+        teltonika = FakeTeltonika(
+            [SmsMessage(index=index, sender="0151 12345678", text="Ja", timestamp=ts)]
+        )
+        sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=budget)
+    assert len(zammad.created_tickets) == 2
+
+
+def test_already_taken_over_sms_dry_run_deletes_nothing():
+    message = SmsMessage(index=4, sender="0151 12345678", text="Hallo")
+    budget = FakeBudget()
+    budget.record_received_sms(sms_to_ticket._fingerprint(message))
+    teltonika = FakeTeltonika([message])
+    zammad = FakeZammad()
+
+    sms_to_ticket.run(teltonika, zammad, _config(), dry_run=True, budget=budget)
+
+    assert teltonika.deleted == []
+    assert zammad.created_tickets == []

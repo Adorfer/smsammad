@@ -1,5 +1,6 @@
 """Orchestrierung SMS -> Zammad-Ticket."""
 
+import hashlib
 import logging
 import re
 
@@ -24,6 +25,14 @@ logger = logging.getLogger("smsammad")
 # Rekonstruktion bzw. landet als Kurzwahl.
 def _looks_like_complete_number(sender: str) -> bool:
     return sender.startswith("+49") or sender.startswith("01")
+
+
+def _fingerprint(message) -> str:
+    """Wiedererkennung einer schon nach Zammad uebernommenen SMS (siehe
+    received_sms in sms_budget.py). Bewusst OHNE den Router-Index: der wird
+    nach dem Loeschen fuer neue SMS wiederverwendet."""
+    raw = "\0".join((message.sender, message.timestamp or "", message.text))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _subject_excerpt(text: str, limit: int = 50) -> str:
@@ -93,6 +102,8 @@ def run(
         dry_run=dry_run,
     )
     logger.info("sms_to_ticket: %d SMS auf dem Router", len(messages))
+    if not dry_run:
+        budget.prune_received_sms()
 
     failures = 0
     for message in messages:
@@ -149,6 +160,23 @@ def _process_one(
     dry_run: bool,
     budget: SmsBudget,
 ) -> None:
+    fingerprint = _fingerprint(message)
+    if budget.received_sms_seen(fingerprint):
+        if dry_run:
+            logger.info(
+                "[dry-run] SMS #%s wurde bereits nach Zammad uebernommen, wuerde sie nur "
+                "auf dem Router loeschen",
+                message.index,
+            )
+            return
+        logger.warning(
+            "SMS #%s wurde bereits nach Zammad uebernommen, das Loeschen auf dem Router war "
+            "aber nicht gelungen -- loesche sie jetzt, KEIN zweites Ticket/Artikel",
+            message.index,
+        )
+        teltonika.delete(message.index)
+        return
+
     sender_id, is_valid_number = _resolve_sender_id(
         message.sender,
         config.teltonika.default_country_code,
@@ -190,7 +218,16 @@ def _process_one(
         amount_eur = _parse_balance(message_text, config.balance.sms_balance_regex)
         if amount_eur is not None:
             _process_balance_reply(
-                message, sender_id, amount_eur, message_text, teltonika, zammad, config, dry_run, budget
+                message,
+                sender_id,
+                amount_eur,
+                message_text,
+                teltonika,
+                zammad,
+                config,
+                dry_run,
+                budget,
+                fingerprint,
             )
             return
         logger.info(
@@ -250,15 +287,17 @@ def _process_one(
 
     open_ticket = zammad.find_open_ticket_for_customer(customer_id)
 
+    # Reihenfolge ist Absicht: Zammad-Schreibzugriff -> lokaler Vermerk ->
+    # Loeschen auf dem Router -> erst DANACH die reinen Statistik-Abfragen.
+    # Ein Fehler nach dem Schreibzugriff darf die SMS nicht auf dem Router
+    # stehen lassen, sonst landet sie im naechsten Lauf ein zweites Mal in
+    # Zammad.
     if open_ticket:
         zammad.add_article(open_ticket.id, body)
-        open_ticket_full = zammad.get_ticket(open_ticket.id)
-        group_name = (
-            zammad.get_group_name(open_ticket_full["group_id"])
-            if open_ticket_full.get("group_id")
-            else None
+        _mark_taken_over(message, fingerprint, teltonika, budget)
+        budget.record_received(
+            group=_group_name_for_stats(open_ticket.id, zammad), ticket_number=open_ticket.number
         )
-        budget.record_received(group=group_name, ticket_number=open_ticket.number)
     else:
         group = _resolve_new_ticket_group(customer_id, was_created, zammad, config)
         # Betreff mit Textauszug statt festem Platzhalter: neuer Kunde ODER
@@ -266,9 +305,28 @@ def _process_one(
         # -- in beiden Faellen wird hier neu angelegt.
         subject = f"Neues SMS-Ticket: {_subject_excerpt(message_text)}"
         zammad.create_ticket(customer_id, group, subject, body)
+        _mark_taken_over(message, fingerprint, teltonika, budget)
         budget.record_received(group=group)
 
+
+def _mark_taken_over(message, fingerprint: str, teltonika: TeltonikaClient, budget: SmsBudget) -> None:
+    """SMS ist in Zammad: erst lokal vermerken, dann auf dem Router loeschen.
+    Scheitert das Loeschen, erkennt der naechste Lauf sie am Vermerk."""
+    budget.record_received_sms(fingerprint)
     teltonika.delete(message.index)
+
+
+def _group_name_for_stats(ticket_id: int, zammad: ZammadClient) -> str | None:
+    """Nur fuer die Statistik -- ein Fehler hier darf den Lauf nicht mehr
+    abbrechen, die SMS ist zu diesem Zeitpunkt bereits uebernommen."""
+    try:
+        ticket = zammad.get_ticket(ticket_id)
+        return zammad.get_group_name(ticket["group_id"]) if ticket.get("group_id") else None
+    except (ZammadError, ZammadUnavailable) as exc:
+        logger.warning(
+            "Gruppe von Ticket-ID %s fuer die Statistik nicht ermittelbar (%s)", ticket_id, exc
+        )
+        return None
 
 
 def _parse_balance(text: str, pattern: str) -> float | None:
@@ -288,6 +346,7 @@ def _process_balance_reply(
     config: Config,
     dry_run: bool,
     budget: SmsBudget,
+    fingerprint: str,
 ) -> None:
     """`amount_eur`/`message_text` werden bereits von _process_one geliefert
     (dort wird der Betrag VOR der Entscheidung "ist das ueberhaupt eine
@@ -303,4 +362,4 @@ def _process_balance_reply(
     if dry_run:
         logger.info("[dry-run] wuerde SMS #%s auf dem Router loeschen", message.index)
         return
-    teltonika.delete(message.index)
+    _mark_taken_over(message, fingerprint, teltonika, budget)
