@@ -580,9 +580,14 @@ python3 run.py check-setup --fix    # gefundene Luecken reparieren
   festen Platzhalters zu zeigen. Gilt nur für neu angelegte Tickets --
   ein Artikel an ein bestehendes offenes Ticket ändert dessen Betreff
   nicht.
-- **Empfangs-Zeitstempel**: der vom Router gemeldete Zeitstempel (Format
-  laut `sms_list`-Antwort, vermutlich Empfangszeit am Modem) wird als
-  `"\n---\nSMS-Empfang: <Zeitstempel>"` an den Artikeltext angehängt.
+- **Empfangs-Signatur**: unter den SMS-Text kommt
+  `"\n---\nSMS-Empfang: <Absender> <Zeitstempel>"`, z.B.
+  `SMS-Empfang: +49 172 1234567 Freitag, 20. November 2026, 11:05:58 Uhr`.
+  Der Absender steht international und lesbar gruppiert (Gruppierung
+  nach `phonenumbers`), Kurzwahlen/alphanumerische Absender roh. Der
+  Zeitstempel ist der vom Router gemeldete (Ortszeit des Routers,
+  vermutlich Empfangszeit am Modem), ins Deutsche umgesetzt; ein
+  unbekanntes Format bleibt unverändert stehen.
 - Nach erfolgreicher Verarbeitung wird die SMS per `sms_delete` vom
   Router gelöscht (verhindert Doppelverarbeitung im nächsten Cronlauf).
 

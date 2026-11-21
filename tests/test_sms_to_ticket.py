@@ -189,7 +189,7 @@ def test_new_customer_creates_ticket_in_triage_group():
 
     sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=budget)
 
-    assert zammad.created_tickets == [(1000, "Triage", "Neues SMS-Ticket: Hallo", "Hallo")]
+    assert zammad.created_tickets == [(1000, "Triage", "Neues SMS-Ticket: Hallo", "Hallo\n---\nSMS-Empfang: +49 1511 2345678")]
     assert teltonika.deleted == [1]
     # neuer Kunde -> Gruppenname direkt bekannt (kein Zammad-Lookup noetig)
     assert budget.received == [("Triage", None)]
@@ -212,7 +212,9 @@ def test_receipt_timestamp_gets_appended_to_body_but_not_subject():
 
     customer_id, group, subject, body = zammad.created_tickets[0]
     assert subject == "Neues SMS-Ticket: Hallo"
-    assert body == "Hallo\n---\nSMS-Empfang: Sat Oct 26 19:04:11 2024"
+    assert body == (
+        "Hallo\n---\nSMS-Empfang: +49 1511 2345678 Samstag, 26. Oktober 2024, 19:04:11 Uhr"
+    )
 
 
 def test_subject_excerpt_keeps_short_text_unchanged():
@@ -248,7 +250,7 @@ def test_known_customer_without_open_ticket_uses_normal_group():
 
     sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=FakeBudget())
 
-    assert zammad.created_tickets == [(42, "Users", "Neues SMS-Ticket: Hallo", "Hallo")]
+    assert zammad.created_tickets == [(42, "Users", "Neues SMS-Ticket: Hallo", "Hallo\n---\nSMS-Empfang: +49 1511 2345678")]
     assert teltonika.deleted == [2]
 
 
@@ -272,7 +274,7 @@ def test_known_customer_without_open_ticket_uses_last_ticket_group_when_enabled(
         teltonika, zammad, _config(group_from_last_ticket=True), dry_run=False, budget=FakeBudget()
     )
 
-    assert zammad.created_tickets == [(42, "Gruppe-77", "Neues SMS-Ticket: Hallo", "Hallo")]
+    assert zammad.created_tickets == [(42, "Gruppe-77", "Neues SMS-Ticket: Hallo", "Hallo\n---\nSMS-Empfang: +49 1511 2345678")]
 
 
 def test_known_customer_without_any_ticket_falls_back_to_default_group_even_when_enabled():
@@ -283,7 +285,7 @@ def test_known_customer_without_any_ticket_falls_back_to_default_group_even_when
         teltonika, zammad, _config(group_from_last_ticket=True), dry_run=False, budget=FakeBudget()
     )
 
-    assert zammad.created_tickets == [(42, "Users", "Neues SMS-Ticket: Hallo", "Hallo")]
+    assert zammad.created_tickets == [(42, "Users", "Neues SMS-Ticket: Hallo", "Hallo\n---\nSMS-Empfang: +49 1511 2345678")]
 
 
 def test_inaccessible_last_ticket_group_falls_back_to_default_group():
@@ -308,7 +310,7 @@ def test_inaccessible_last_ticket_group_falls_back_to_default_group():
         teltonika, zammad, _config(group_from_last_ticket=True), dry_run=False, budget=FakeBudget()
     )
 
-    assert zammad.created_tickets == [(42, "Users", "Neues SMS-Ticket: Hallo", "Hallo")]
+    assert zammad.created_tickets == [(42, "Users", "Neues SMS-Ticket: Hallo", "Hallo\n---\nSMS-Empfang: +49 1511 2345678")]
 
 
 def test_new_customer_ignores_group_from_last_ticket_setting():
@@ -319,7 +321,7 @@ def test_new_customer_ignores_group_from_last_ticket_setting():
         teltonika, zammad, _config(group_from_last_ticket=True), dry_run=False, budget=FakeBudget()
     )
 
-    assert zammad.created_tickets == [(1000, "Triage", "Neues SMS-Ticket: Hallo", "Hallo")]
+    assert zammad.created_tickets == [(1000, "Triage", "Neues SMS-Ticket: Hallo", "Hallo\n---\nSMS-Empfang: +49 1511 2345678")]
 
 
 def test_open_ticket_gets_article_instead_of_new_ticket():
@@ -334,7 +336,7 @@ def test_open_ticket_gets_article_instead_of_new_ticket():
     sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=budget)
 
     assert zammad.created_tickets == []
-    assert zammad.added_articles == [(9, "Hallo", False)]
+    assert zammad.added_articles == [(9, "Hallo\n---\nSMS-Empfang: +49 1511 2345678", False)]
     assert teltonika.deleted == [3]
     # offenes Ticket -> Gruppenname per get_ticket/get_group_name aufgeloest
     # (FakeZammad.get_ticket liefert group_id=42, get_group_name "Gruppe-42")
@@ -457,7 +459,7 @@ def test_short_code_sender_falls_back_to_raw_string():
     sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=FakeBudget())
 
     assert zammad.created_tickets == [
-        (1000, "Triage", "Neues SMS-Ticket: Systemnachricht", "Systemnachricht")
+        (1000, "Triage", "Neues SMS-Ticket: Systemnachricht", "Systemnachricht\n---\nSMS-Empfang: 22543")
     ]
     assert teltonika.deleted == [5]
 
@@ -468,7 +470,9 @@ def test_short_number_gets_reconstructed_with_configured_prefix():
 
     sms_to_ticket.run(teltonika, zammad, _config(short_number_prefix="0172"), dry_run=False, budget=FakeBudget())
 
-    assert zammad.created_tickets == [(1000, "Triage", "Neues SMS-Ticket: Hallo", "Hallo")]
+    assert zammad.created_tickets == [
+        (1000, "Triage", "Neues SMS-Ticket: Hallo", "Hallo\n---\nSMS-Empfang: +49 172 1234567")
+    ]
     assert teltonika.deleted == [6]
 
 
@@ -522,7 +526,7 @@ def test_short_code_sender_gets_prefixed_when_configured():
     )
 
     assert zammad.created_tickets == [
-        (1000, "Triage", "Neues SMS-Ticket: Systemnachricht", "Systemnachricht")
+        (1000, "Triage", "Neues SMS-Ticket: Systemnachricht", "Systemnachricht\n---\nSMS-Empfang: Kurzwahl:22543")
     ]
     assert teltonika.deleted == [7]
 
@@ -544,7 +548,7 @@ def test_balance_reply_ok_closes_ticket():
         teltonika, zammad, _config(balance=_balance_config()), dry_run=False, budget=budget
     )
 
-    assert zammad.created_tickets == [(1000, "Triage", "SMS-Guthaben", _BALANCE_TEXT_OK)]
+    assert zammad.created_tickets == [(1000, "Triage", "SMS-Guthaben", _BALANCE_TEXT_OK + "\n---\nSMS-Empfang: 80808")]
     assert zammad.subjects == [(555, "SMS-Guthaben")]
     assert zammad.states == [(555, 4)]
     assert zammad.priorities == []
@@ -604,7 +608,7 @@ def test_balance_reply_on_existing_open_ticket_appends_and_updates_fields():
     )
 
     assert zammad.created_tickets == []
-    assert (9, _BALANCE_TEXT_WARN, False) in zammad.added_articles
+    assert (9, _BALANCE_TEXT_WARN + "\n---\nSMS-Empfang: 80808", False) in zammad.added_articles
     assert zammad.subjects == [(9, "SMS Guthaben sollte aufgeladen werden")]
     assert zammad.priorities == [(9, 2)]
 
@@ -746,7 +750,7 @@ def test_zammad_outage_after_article_still_deletes_sms_from_router():
 
     sms_to_ticket.run(teltonika, zammad, _config(), dry_run=False, budget=budget)
 
-    assert zammad.added_articles == [(9, "Hallo", False)]
+    assert zammad.added_articles == [(9, "Hallo\n---\nSMS-Empfang: +49 1511 2345678", False)]
     assert teltonika.deleted == [3]
     assert budget.received == [(None, "1009")]
 
@@ -775,3 +779,15 @@ def test_already_taken_over_sms_dry_run_deletes_nothing():
 
     assert teltonika.deleted == []
     assert zammad.created_tickets == []
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("Fri Nov 20 11:05:58 2026", "Freitag, 20. November 2026, 11:05:58 Uhr"),
+        ("Mon Mar  2 08:00:01 2026", "Montag, 2. März 2026, 08:00:01 Uhr"),  # ctime-Leerzeichen
+        ("irgendwas anderes", "irgendwas anderes"),  # unbekannt -> Rohwert
+    ],
+)
+def test_format_router_timestamp(raw, expected):
+    assert sms_to_ticket._format_router_timestamp(raw) == expected

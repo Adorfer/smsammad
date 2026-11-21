@@ -23,6 +23,13 @@ def to_teltonika_format(number: str, default_region: str) -> str:
     return f"00{parsed.country_code}{parsed.national_number}"
 
 
+def to_international(number: str, default_region: str) -> str:
+    """z.B. '+4915112345678' -> '+49 151 12345678' (nur zur Anzeige; fuer
+    Zammad-Suchfelder ungeeignet, dort trennt das Leerzeichen Tokens)."""
+    parsed = _parse(number, default_region)
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+
+
 def to_e164(number: str, default_region: str) -> str:
     """z.B. '0151 12345678' (DE) -> '+4915112345678'."""
     parsed = _parse(number, default_region)

@@ -3,12 +3,13 @@
 import hashlib
 import logging
 import re
+from datetime import datetime
 
 from . import access_guard, balance_ticket
 from .config import Config
 from .htmltext import html_to_text
 from .logging_setup import redact_content
-from .phone import PhoneNumberError, to_e164
+from .phone import PhoneNumberError, to_e164, to_international
 from .sms_budget import SmsBudget
 from .teltonika import TeltonikaAuthError, TeltonikaClient
 from .zammad import ZammadClient, ZammadError, ZammadUnavailable
@@ -25,6 +26,47 @@ logger = logging.getLogger("smsammad")
 # Rekonstruktion bzw. landet als Kurzwahl.
 def _looks_like_complete_number(sender: str) -> bool:
     return sender.startswith("+49") or sender.startswith("01")
+
+
+_WEEKDAYS_DE = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+_MONTHS_DE = (
+    "Januar", "Februar", "März", "April", "Mai", "Juni",
+    "Juli", "August", "September", "Oktober", "November", "Dezember",
+)
+
+
+def _format_router_timestamp(raw: str) -> str:
+    """Router-Zeitstempel im C-ctime-Format ("Fri Nov 20 11:05:58 2026",
+    englische Kuerzel, Ortszeit des Routers) -> "Freitag, 20. November
+    2026, 11:05:58 Uhr". Namen bewusst selbst uebersetzt statt per
+    locale: haengt so nicht davon ab, ob auf dem Host de_DE installiert
+    ist. Unbekanntes Format -> Rohwert, nichts geht verloren."""
+    try:
+        parsed = datetime.strptime(raw.strip(), "%a %b %d %H:%M:%S %Y")
+    except ValueError:
+        return raw
+    return (
+        f"{_WEEKDAYS_DE[parsed.weekday()]}, {parsed.day}. {_MONTHS_DE[parsed.month - 1]} "
+        f"{parsed.year}, {parsed:%H:%M:%S} Uhr"
+    )
+
+
+def _receipt_footer(message, sender_id: str, is_valid_number: bool, default_region: str) -> str:
+    """Signatur unter dem SMS-Text: Absender (lesbar gruppiert) und
+    Empfangszeit laut Router."""
+    sender = sender_id
+    if is_valid_number:
+        try:
+            sender = to_international(sender_id, default_region)
+        except PhoneNumberError:
+            pass
+    parts = [sender]
+    if message.timestamp:
+        # Vom Router gemeldeter Zeitstempel (vermutlich Empfangszeit am
+        # Modem, ggf. auch Absendezeit laut SMSC -- die cgi-bin-API
+        # spezifiziert das nicht genauer).
+        parts.append(_format_router_timestamp(message.timestamp))
+    return "\n---\nSMS-Empfang: " + " ".join(parts)
 
 
 def _fingerprint(message) -> str:
@@ -222,6 +264,7 @@ def _process_one(
                 sender_id,
                 amount_eur,
                 message_text,
+                is_valid_number,
                 teltonika,
                 zammad,
                 config,
@@ -238,12 +281,9 @@ def _process_one(
             redact_content(message_text),
         )
 
-    body = message_text
-    if message.timestamp:
-        # Vom Router gemeldeter Zeitstempel (vermutlich Empfangszeit am
-        # Modem, ggf. auch Absendezeit laut SMSC -- die cgi-bin-API
-        # spezifiziert das nicht genauer).
-        body = f"{body}\n---\nSMS-Empfang: {message.timestamp}"
+    body = message_text + _receipt_footer(
+        message, sender_id, is_valid_number, config.teltonika.default_country_code
+    )
 
     if dry_run:
         # Nur lesende Suche -- find_or_create_customer_by_phone wuerde bei
@@ -341,6 +381,7 @@ def _process_balance_reply(
     sender_id: str,
     amount_eur: float,
     message_text: str,
+    is_valid_number: bool,
     teltonika: TeltonikaClient,
     zammad: ZammadClient,
     config: Config,
@@ -353,9 +394,9 @@ def _process_balance_reply(
     Guthaben-Antwort" geprueft, siehe dort)."""
     assert config.balance is not None  # von _process_one bereits geprueft
 
-    body = message_text
-    if message.timestamp:
-        body = f"{body}\n---\nSMS-Empfang: {message.timestamp}"
+    body = message_text + _receipt_footer(
+        message, sender_id, is_valid_number, config.teltonika.default_country_code
+    )
 
     balance_ticket.apply_balance_result(amount_eur, sender_id, body, zammad, config, dry_run, budget)
 
